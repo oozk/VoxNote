@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -58,7 +59,7 @@ import java.util.Date
 import java.util.Locale
 
 @Composable
-fun RecordScreen() {
+fun RecordScreen(autoStart: Boolean = false) {
     val app = LocalApp.current
     val c = app.appVm.container
     val ctx = LocalContext.current
@@ -82,6 +83,12 @@ fun RecordScreen() {
             if (Build.VERSION.SDK_INT >= 33) req.add(Manifest.permission.POST_NOTIFICATIONS)
             permissions.launch(req.toTypedArray())
         }
+    }
+
+    val captioner by c.captioner.collectAsStateWithLifecycle()
+    var autoStarted by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(autoStart) {
+        if (autoStart && !autoStarted && state !is RecorderState.Recording) { autoStarted = true; onRecordPressed() }
     }
 
     // after "record and transcribe", jump to the progress screen
@@ -122,6 +129,7 @@ fun RecordScreen() {
                     }
                     Text(if (transcribeAfter) "Transcription starts automatically when you stop." else "The recording will be saved. You can transcribe it later.",
                         style = MaterialTheme.typography.bodySmall)
+                    captioner?.let { cap -> LiveCaptionsView(cap) }
                 }
                 is RecorderState.Saved -> {
                     SectionCard("Recording saved") {
@@ -137,7 +145,7 @@ fun RecordScreen() {
                 }
                 else -> {
                     if (state is RecorderState.Error) InfoBanner((state as RecorderState.Error).message, warning = true)
-                    if (permissionDenied) InfoBanner("Microphone permission is needed to record. You can allow it in Android Settings › Apps › Offline Transcriber › Permissions.", warning = true)
+                    if (permissionDenied) InfoBanner("Microphone permission is needed to record. You can allow it in Android Settings › Apps › VoxNote › Permissions.", warning = true)
                     OutlinedTextField(name, { name = it }, label = { Text("Recording name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     LargeFloatingActionButton(
                         onClick = { scope.launch { onRecordPressed() } },
@@ -155,6 +163,11 @@ fun RecordScreen() {
                         LabeledSwitch("Transcribe when I stop", "Off = record now, transcribe later from the Transcribe screen.", transcribeAfter, { v ->
                             scope.launch { c.settings.update { it.copy(transcribeAfterRecording = v) } }
                         })
+                        LabeledSwitch("Live captions", "Show text while you record. Uses more battery; works best with small models.",
+                            settings?.liveCaptions == true, { v -> scope.launch { c.settings.update { it.copy(liveCaptions = v) } } })
+                        val stops = listOf(0, 5, 10, 30, 60)
+                        Chooser("Stop automatically after silence", stops, settings?.recordingAutoStopSec ?: 0,
+                            { if (it == 0) "Never" else "$it seconds of silence" }, { v -> scope.launch { c.settings.update { it.copy(recordingAutoStopSec = v) } } })
                     }
                     Text("Recordings are saved as WAV files inside the app and never uploaded.", style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -173,3 +186,21 @@ private fun LevelMeter(level: Float) {
 }
 
 private fun defaultRecordingName() = "Recording " + SimpleDateFormat("yyyy-MM-dd HH.mm", Locale.getDefault()).format(Date())
+
+/** Live caption text (finished lines plus the replaceable line in progress). */
+@Composable
+fun LiveCaptionsView(cap: com.offlinetranscriber.transcription.LiveCaptioner) {
+    val captions by cap.captions.collectAsStateWithLifecycle()
+    val scroll = rememberScrollState()
+    LaunchedEffect(captions.lines.size, captions.partial) { scroll.animateScrollTo(scroll.maxValue) }
+    SectionCard("Live captions") {
+        Column(Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(scroll)) {
+            if (captions.lines.isEmpty() && captions.partial.isBlank()) {
+                Text("Captions appear after the first sentence…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            captions.lines.takeLast(30).forEach { Text(it, style = MaterialTheme.typography.bodyLarge) }
+            if (captions.partial.isNotBlank()) Text(captions.partial, style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+        }
+    }
+}

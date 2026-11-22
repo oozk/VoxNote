@@ -194,7 +194,7 @@ object KeywordExport {
 
     /** One keyword per line; alternatives and category after `|` (re-importable). */
     fun toTxt(rows: List<Row>): String = buildString {
-        append("# Offline Transcriber vocabulary — format: keyword | alternative; alternative | category\n")
+        append("# VoxNote vocabulary — format: keyword | alternative; alternative | category\n")
         for (r in rows) {
             append(r.phrase)
             if (r.alternatives.isNotEmpty() || r.category != BuiltInCategories.CUSTOM) {

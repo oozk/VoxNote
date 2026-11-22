@@ -25,6 +25,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -99,7 +100,12 @@ private fun JobPanel(id: Long, run: RunState?) {
     val categories by c.vocabulary.categoryCounts.collectAsStateWithLifecycle(emptyList())
     val t = job ?: return
     val isRunning = run?.jobId == id
-    val usable = models.filter { it.compatible && it.verified >= 0 }
+    val usable = models.filter { it.compatible && it.verified >= 0 && it.role == "asr" }
+    val speakerModel = models.firstOrNull { it.compatible && it.role == "diarize" && it.verified >= 0 }
+    val modes by c.db.modes().observeAll().collectAsStateWithLifecycle(emptyList())
+    var identifySpeakers by remember(id) { mutableStateOf<Boolean?>(null) }
+    var removeFillers by remember(id) { mutableStateOf<Boolean?>(null) }
+    var saveMode by remember { mutableStateOf(false) }
 
     var modelId by remember(id) { mutableStateOf<Long?>(null) }
     var language by remember(id) { mutableStateOf<String?>(null) }
@@ -108,6 +114,8 @@ private fun JobPanel(id: Long, run: RunState?) {
         if (modelId == null) modelId = t.modelId?.takeIf { m -> usable.any { it.id == m } } ?: settings?.defaultModelId?.takeIf { m -> usable.any { it.id == m } } ?: usable.firstOrNull()?.id
         if (language == null) language = t.languageRequested.takeIf { it != "auto" } ?: settings?.language ?: "auto"
         if (chosenCats == null) chosenCats = t.vocabularyCategories.lines().filter { it.isNotBlank() }.toSet()
+        if (identifySpeakers == null) identifySpeakers = t.identifySpeakers || (settings?.identifySpeakers == true)
+        if (removeFillers == null && settings != null) removeFillers = settings!!.removeFillers
     }
     val model: ModelEntity? = usable.firstOrNull { it.id == modelId }
     val notifPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -116,11 +124,20 @@ private fun JobPanel(id: Long, run: RunState?) {
         if (Build.VERSION.SDK_INT >= 33) notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         scope.launch {
             val lang = if (model?.multilingual == false) "en" else (language ?: "auto")
-            c.transcriptions.queue(id, modelId, lang, chosenCats?.toList().orEmpty(), restart)
+            if (removeFillers != null && removeFillers != settings?.removeFillers) c.settings.update { it.copy(removeFillers = removeFillers!!) }
+            c.transcriptions.queue(id, modelId, lang, chosenCats?.toList().orEmpty(), restart,
+                identifySpeakers = identifySpeakers == true && speakerModel != null)
             TranscriptionService.start(ctx)
         }
     }
 
+    if (saveMode) SaveModeDialog(onSave = { n ->
+        scope.launch {
+            c.db.modes().insert(com.offlinetranscriber.data.ModeEntity(name = n, modelId = modelId, language = language ?: "auto",
+                categories = chosenCats.orEmpty().joinToString("\n"), identifySpeakers = identifySpeakers == true,
+                removeFillers = removeFillers == true))
+        }
+    }, onDismiss = { saveMode = false })
     SectionCard {
         Text(t.title, style = MaterialTheme.typography.titleLarge)
         Text("Audio: ${java.io.File(t.audioPath).name} · ${Format.duration(t.audioDurationMs)}", style = MaterialTheme.typography.bodySmall)
@@ -146,8 +163,21 @@ private fun JobPanel(id: Long, run: RunState?) {
                 BigButton("Go to Models", null, { app.goTop("models") })
                 return
             }
+            if (modes.isNotEmpty()) SectionCard("Modes") {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    modes.forEach { m ->
+                        FilterChip(false, {
+                            m.modelId?.takeIf { mid -> usable.any { it.id == mid } }?.let { modelId = it }
+                            language = m.language
+                            chosenCats = m.categories.lines().filter { it.isNotBlank() }.toSet()
+                            identifySpeakers = m.identifySpeakers
+                            removeFillers = m.removeFillers
+                        }, label = { Text(m.name) })
+                    }
+                }
+            }
             SectionCard("Settings for this transcription") {
-                Chooser("Model", usable, model, { "${it.displayName} (${Format.bytes(it.sizeBytes)})" }, { modelId = it.id })
+                Chooser("Model", usable, model, { "${it.displayName} (${Format.bytes(it.sizeBytes)}) · ${it.engine}" }, { modelId = it.id })
                 if (model?.multilingual == false) {
                     Text("This model understands English only.", style = MaterialTheme.typography.bodySmall)
                 } else {
@@ -165,6 +195,13 @@ private fun JobPanel(id: Long, run: RunState?) {
                     }
                 }
             }
+            SectionCard {
+                LabeledSwitch("Identify speakers", if (speakerModel == null) "Add a speaker model on the Models screen to label who is speaking."
+                    else "Label who is speaking with the on-device speaker model.", identifySpeakers == true && speakerModel != null,
+                    { identifySpeakers = it }, enabled = speakerModel != null)
+                LabeledSwitch("Remove filler words", "Removes \"uh\", \"um\" and stutters. The original text is kept.", removeFillers == true, { removeFillers = it })
+                TextButton(onClick = { saveMode = true }) { Text("Save these choices as a mode…") }
+            }
             val resumable = t.status in setOf(JobStatus.INTERRUPTED, JobStatus.CANCELLED, JobStatus.FAILED) && t.chunkPlan != null && t.nextChunk > 0
             if (resumable) {
                 BigButton("Resume (${(t.progress * 100).toInt()} % done)", Icons.Filled.PlayArrow, { start(false) })
@@ -178,6 +215,15 @@ private fun JobPanel(id: Long, run: RunState?) {
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+@Composable
+private fun SaveModeDialog(onSave: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf("") }
+    androidx.compose.material3.AlertDialog(onDismissRequest = onDismiss, title = { Text("Save as mode") },
+        text = { androidx.compose.material3.OutlinedTextField(name, { name = it }, singleLine = true, label = { Text("Name, e.g. Lab meeting") }) },
+        confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = { onSave(name.trim()); onDismiss() }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
 @Composable

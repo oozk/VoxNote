@@ -16,3 +16,4 @@ release.keystore
 build-host/
 .kotlin/
 dist/
+!app/src/main/assets/vad/*.bin

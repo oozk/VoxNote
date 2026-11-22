@@ -1,37 +1,44 @@
-# Offline Transcriber (Android)
+# VoxNote — offline transcription for Android
 
-Native Android app (Kotlin + Jetpack Compose + C++/NDK) that turns recorded or imported audio
-into text **entirely on the device**, using Whisper models in whisper.cpp GGML format.
+Native Android app (Kotlin + Jetpack Compose + C++/NDK) that turns speech into text **entirely on the
+device**. It runs two local inference engines: whisper.cpp (Whisper GGML models) and transcribe.cpp
+(GGUF models such as Parakeet, Moonshine, SenseVoice, Whisper GGUF, plus the Sortformer speaker model).
 
 * **No internet permission.** The APK does not request `android.permission.INTERNET`, so Android
-  itself blocks every network socket from the app. Audio, transcripts, keywords and settings cannot
-  leave the device through it. No analytics, no ads, no accounts, no cloud backup (backup is disabled).
-* **Real local inference.** whisper.cpp v1.9.5 (vendored in `app/src/main/cpp/third_party`) on the CPU
-  via a small JNI bridge. No Android speech services, no cloud fallback.
+  itself blocks every network socket from the app. No analytics, ads, accounts or cloud backup.
+* **Use it anywhere.** VoxNote is a system speech service, a voice-input popup for keyboards and
+  websites, and a voice keyboard, so you can dictate into other apps with your own vocabulary.
 * **My Vocabulary.** A large ADD KEYWORD button, alternative spellings, categories, paste-many,
-  TXT/CSV import and export, duplicate detection. Built to handle thousands of terms.
+  TXT/CSV import and export, plus exact word replacements. Built for thousands of terms.
 
 ## Features
 
 | Area | What's included |
 |---|---|
-| Engine | Loads GGML Whisper models (tiny through large-v3-turbo, F16/F32/Q4–Q8/K-quants) from local storage. Auto or manual language. Configurable threads, CPU mode and quality (greedy, beam 3 or beam 5). Long audio is split into chunks at pauses. Timestamps, progress, ETA, cancellation, resume after interruption |
-| Models | Import by copy or register in place (no copy). Compatibility is checked from the file header, then confirmed by a real load. Clear errors for GGUF, safetensors, PyTorch, HTML pages and truncated downloads. Default model, removal, RAM and storage info, memory check before loading, optional Hugging Face catalogue opened in the browser |
-| Audio | In-app recorder (16 kHz WAV, pause/resume, level meter, works with the screen off). Import from storage, the Share menu and "Open with". WAV, MP3, M4A/AAC, FLAC, OGG, OPUS and video sound tracks are decoded with Android's own codecs |
-| Vocabulary | Add/edit/delete/search, starred terms, 9 built-in categories plus your own, bulk paste, TXT/CSV import with preview, merge of new spellings, CSV/TXT export |
-| Vocabulary assistance | (1) prompt context, (2) a decoder keyword boost, (3) local correction suggestions, each clearly labelled; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| Transcript | Edit parts, restore the original, copy, select text, search, find and replace, tap a timestamp to play from there. Export TXT, timestamped TXT, DOCX, SRT, VTT. Save to the device or share |
-| History | Local list with preview, search, reopen, export, delete |
-| Settings | Everything from the spec, plus "Delete all app data" |
+| Engines | **whisper.cpp v1.9.5**: GGML Whisper tiny to large-v3-turbo, keyword boost, Silero VAD. **transcribe.cpp 0.4.2**: GGUF Parakeet (fast, 25 European languages), Moonshine, SenseVoice, Canary, Whisper GGUF and more. CPU, configurable threads and quality, auto or manual language |
+| Long audio | Chunks cut at pauses, progress and ETA, cancel, resume after interruption, foreground service |
+| Silence | Bundled **Silero VAD** skips silence (faster, no invented text in pauses). An energy endpointer auto-stops dictation and, optionally, recordings |
+| Speakers | Optional **Sortformer** speaker model labels who is speaking. In the editor, rename speakers, merge two labels for one person, or move one part to another speaker. Exports include names |
+| Vocabulary assistance | Prompt context (whisper), decoder keyword boost (whisper), native vocabulary lists (models that support them), local correction suggestions, exact replacements, filler and stutter removal, a punctuation hint per language. Each is labelled honestly |
+| Voice input | System `RecognitionService`, `RECOGNIZE_SPEECH` popup (SwiftKey, website voice search), voice keyboard (for keyboards whose mic key switches to a voice keyboard, e.g. HeliBoard and FlorisBoard). Gboard can't use it |
+| Live captions | While recording, and for **audio played by other apps** (playback capture, Android 10+). Captured audio is saved so you can transcribe it properly afterwards |
+| Audio | Recorder (16 kHz WAV, pause/resume, level meter, works with the screen off, pauses other audio). Import from storage, the Share menu and "Open with": WAV, MP3, M4A/AAC, FLAC, OGG, OPUS, video sound |
+| Transcript | Edit, restore original, uncertain parts shaded, search, find and replace, tap to play, suggestions with accept/reject/undo. Export TXT, timestamped TXT, DOCX, SRT, VTT (speaker voice tags), Markdown, JSON |
+| Shortcuts | Quick Settings tile and home-screen widget (one tap to record), saved **modes** (model, language, vocabulary categories, speakers, filler removal) |
+| Models | Import by copy or register in place. GGML and GGUF compatibility is read from the file, then confirmed by a real load. Speaker, VAD and LLM files are recognised. RAM check before loading. Optional Hugging Face catalogue opened in the browser |
 
 ## Documentation
 
 * [docs/BUILDING.md](docs/BUILDING.md): build the APK
 * [docs/MODELS.md](docs/MODELS.md): get and import models from Hugging Face
 * [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how it works and what vocabulary assistance really does
-* [docs/TESTING.md](docs/TESTING.md): automated tests and the airplane-mode test checklist
+* [docs/VOICE_INPUT.md](docs/VOICE_INPUT.md): dictating into other apps
+* [docs/TESTING.md](docs/TESTING.md): automated tests and the airplane-mode checklist
+* [docs/FEATURE_SOURCES.md](docs/FEATURE_SOURCES.md): which ideas came from which open-source projects
 
 ## Licences
 
-App code: yours. whisper.cpp and ggml: MIT (`app/src/main/cpp/third_party/whisper.cpp/LICENSE`).
-`app/src/test/resources/jfk.wav` comes from the whisper.cpp repository.
+App code: yours. whisper.cpp, ggml, transcribe.cpp and Silero VAD: MIT (licence files under
+`*/src/main/cpp/third_party/`). Models you download carry their own licences: Whisper is MIT,
+Parakeet is CC-BY-4.0, Sortformer uses the NVIDIA Open Model License. `jfk.wav` comes from the
+whisper.cpp repository.

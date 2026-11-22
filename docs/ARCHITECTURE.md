@@ -1,7 +1,7 @@
 # Architecture
 
 ```
-UI (Jetpack Compose, Material 3)
+UI (Jetpack Compose, Material 3) · Voice popup · Voice keyboard (IME) · RecognitionService · QS tile · widget
  ├─ Home · Record · Transcribe · My Vocabulary · Models · History · Settings · Transcript editor
  │
  ├─ Repositories (Room DB: keywords, categories, models, transcriptions, segments, suggestions, settings)
@@ -10,7 +10,9 @@ UI (Jetpack Compose, Material 3)
  │    └─ TranscriptionRunner ── AudioDecoder (MediaExtractor/MediaCodec → 16 kHz mono WAV)
  │          │                 └ ChunkPlanner (cut at pauses)
  │          └─ ChunkedTranscriber (pure Kotlin) ── PromptBuilder · CorrectionEngine
- │                 └─ SpeechEngine → WhisperEngine → JNI (transcriber_jni.cpp) → whisper.cpp / ggml (CPU)
+ │                 └─ SpeechEngine ┬ WhisperEngine → libtranscriber_jni.so → whisper.cpp + ggml (copy 1)
+ │                                 └ TranscribeCppEngine → libtranscribe_jni.so → transcribe.cpp + ggml (copy 2)
+ │                    SpeakerDiarizer (Sortformer, transcribe.cpp) · Silero VAD (whisper.cpp, bundled model)
  │
  └─ RecordingService (foreground "microphone") └─ Recorder (AudioRecord → WAV)
 ```
@@ -19,7 +21,20 @@ Everything below the UI that does not need Android (engine interface, chunking, 
 matching, prompt building, export, WAV handling) is plain Kotlin, so JVM tests can exercise it,
 including against the real native library.
 
-## Inference engine
+## Two inference engines
+* **whisper.cpp** (module `app`, `libtranscriber_jni.so`) runs Whisper GGML `.bin` files. It supports
+  the prompt, the decoder keyword boost, Silero VAD and per-segment confidence.
+* **transcribe.cpp** (module `engine-transcribe`, `libtranscribe_jni.so`) runs GGUF speech models
+  (Parakeet, Moonshine, SenseVoice, Canary, Granite, Qwen3-ASR, Whisper GGUF, …) and the Sortformer
+  speaker model. Weights are memory-mapped (clean, file-backed pages, which Android's low-memory
+  killer does not count as app memory). Prompt and vocabulary-list support depends on the model
+  family. The engine reports its `EngineCapabilities`, and VoxNote only uses what the model supports.
+* Each engine is its own shared library with a **private copy of ggml** (`--exclude-libs,ALL`, no
+  exported ggml symbols), so the two versions never clash in one process.
+* `ModelInspector` reads GGML headers and GGUF metadata (`general.architecture`, languages, licence)
+  to choose the engine and the role (speech / speaker), and to reject LLMs, VAD and language-ID files.
+
+## Inference engine details (whisper.cpp)
 * whisper.cpp **v1.9.5** with ggml, **CPU backend only**, built from vendored sources with CMake.
   The arm64 build targets `armv8.2-a+fp16+dotprod`.
 * **Why no GPU/NNAPI:** ggml has no NNAPI backend. Its Vulkan backend is not reliable for Whisper
@@ -50,6 +65,9 @@ including against the real native library.
 Three separate mechanisms, each with its own setting. The app states plainly that **none of them
 is acoustic-model biasing**: none can make the model hear a word.
 
+0. Which of the mechanisms below apply depends on the model's engine: whisper.cpp supports 1 and 2;
+   transcribe.cpp models use 1 and/or a native vocabulary list where the family supports them (Parakeet
+   accepts a vocabulary list but no prompt); 3 always applies. The transcript records what was used.
 1. **Prompt context (decoder conditioning).** A `Glossary: term, term, …` text is passed as
    whisper's `initial_prompt` and re-applied to every 30 s window (`carry_initial_prompt`). The
    decoder then tends to spell those terms the same way. The budget is about 200 tokens, counted
@@ -74,10 +92,47 @@ is acoustic-model biasing**: none can make the model hear a word.
    only exact listed alternatives (≥ 0.95) are applied automatically, and each can be undone.
    Everything else waits for Accept/Reject. Automatic corrections can be turned off.
 
+## Silence and endpointing
+* **Silero VAD v6.2** (0.9 MB, bundled in `assets/vad`) is passed to whisper.cpp
+  (`params.vad`). Only detected speech is decoded, and timestamps are mapped back to the original
+  audio. It's faster, and it stops Whisper inventing sentences in long pauses.
+* `EnergyEndpointer` (20 ms frames, adaptive noise floor = 10th percentile of the last 2 s, +10 dB
+  speech threshold) ends dictation after a pause, auto-stops recordings (optional) and segments live
+  captions. `speechRange()` trims long leading and trailing silence before dictation is transcribed.
+
+## Voice input for other apps
+`VoiceInputSession` records into memory, ends on a pause, trims silence, transcribes with the default
+model and vocabulary, applies auto-apply corrections, replacements and filler removal, then returns the
+text. Three front ends share it: `RecognizeActivity` (RECOGNIZE_SPEECH popup), `VoiceRecognitionService`
+(SpeechRecognizer) and `VoiceKeyboardService` (IME). Only one session runs at a time.
+
+## Live captions
+`LiveCaptioner` gets 16 kHz frames from the recorder, or from `DeviceAudioCaptureService` (Android
+playback capture through MediaProjection). Speech is cut into segments of 8 s at most, at 0.7 s
+pauses:
+* **Draft text:** while speech is in progress, the current segment is re-transcribed about every
+  1.2 s, but only when the worker is idle. Only the newest draft is processed, so a slow phone never
+  builds a queue.
+* **Final text:** each finished segment is queued in order and never dropped. When several are
+  waiting, they are merged into one run.
+
+Captions are a preview: the saved audio is transcribed normally afterwards.
+
+## Speakers
+After transcription, if *Identify speakers* is on and a Sortformer model is installed, the audio is
+diarized in 15-minute windows. Segments get the speaker with the largest time overlap, and speakers
+are numbered in order of appearance. Numbering is consistent within a window; a later window may
+assign new numbers, which "Merge" in the editor fixes. Names live on the transcript and are used by
+all exports (VTT uses `<v Name>` voice tags).
+
+## Text pipeline (after each part)
+engine text → auto-applied corrections (≥ threshold) → word replacements → filler/stutter removal.
+The engine's text is kept as `originalText`, and suggestions remain reviewable.
+
 ## Privacy
 * No `INTERNET` or `ACCESS_NETWORK_STATE` permission (explicitly removed in the manifest; check
   with `aapt2 dump permissions`).
 * `allowBackup=false`, and data-extraction rules exclude everything from cloud and device transfer.
 * Files live in app-private storage. Data leaves only when you export or share.
-* Permissions: `RECORD_AUDIO`, foreground-service types (microphone, dataSync, mediaProcessing),
-  `POST_NOTIFICATIONS`, `WAKE_LOCK`.
+* Permissions: `RECORD_AUDIO`, foreground-service types (microphone, dataSync, mediaProcessing,
+  mediaProjection for device-audio captions), `POST_NOTIFICATIONS`, `WAKE_LOCK`.

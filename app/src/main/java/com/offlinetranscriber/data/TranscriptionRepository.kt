@@ -110,6 +110,27 @@ class TranscriptionRepository(private val db: AppDatabase, private val storage: 
         t.pcmPath?.let { p -> if (p != t.audioPath) File(p).delete() }
     }
 
+    // ---------- speakers ----------
+
+    suspend fun renameSpeaker(tid: Long, speaker: Int, name: String) {
+        val t = jobs.get(tid) ?: return
+        val map = t.speakerNameMap().toMutableMap()
+        if (name.isBlank()) map.remove(speaker) else map[speaker] = name.trim().replace('\n', ' ')
+        jobs.update(t.copy(speakerNames = map.entries.sortedBy { it.key }.joinToString("\n") { "${it.key}=${it.value}" }))
+    }
+
+    /** All parts of speaker [from] become speaker [to] (fixes one person split into two). */
+    suspend fun mergeSpeakers(tid: Long, from: Int, to: Int) {
+        if (from == to) return
+        segments.mergeSpeaker(tid, from, to)
+        renameSpeaker(tid, from, "")
+    }
+
+    suspend fun setSegmentSpeaker(segmentId: Long, speaker: Int?) {
+        val s = segments.get(segmentId) ?: return
+        segments.update(s.copy(speaker = speaker))
+    }
+
     // ---------- editing ----------
 
     suspend fun editSegment(segmentId: Long, text: String) {
@@ -173,14 +194,14 @@ class TranscriptionRepository(private val db: AppDatabase, private val storage: 
 
     suspend fun exportDocument(tid: Long, includeMetadata: Boolean = true): ExportDocument {
         val t = jobs.get(tid) ?: error("Transcription not found")
-        val segs = segments.forTranscription(tid).map { ExportSegment(it.startMs, it.endMs, it.text) }
+        val segs = segments.forTranscription(tid).map { ExportSegment(it.startMs, it.endMs, it.text, t.speakerName(it.speaker)) }
         val meta = if (!includeMetadata) emptyList() else listOfNotNull(
             "Date" to Format.date(t.createdAt),
             "Duration" to Format.duration(t.audioDurationMs),
             t.modelName?.let { "Model" to it },
             "Language" to Languages.name(t.languageDetected ?: t.languageRequested),
             "Audio file" to File(t.audioPath).name,
-            "Transcribed locally with" to "Offline Transcriber (whisper.cpp)",
+            "Transcribed locally with" to "VoxNote (${t.modelName ?: "on-device model"})",
         )
         return ExportDocument(t.title, segs, meta)
     }

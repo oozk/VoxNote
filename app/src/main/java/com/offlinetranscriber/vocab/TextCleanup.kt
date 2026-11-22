@@ -33,10 +33,11 @@ object TextCleanup {
             val p = parts[i]
             val isWord = p.first().isLetterOrDigit() || p.first() == '\''
             if (isWord && p.lowercase() in fillers) {
-                // drop the filler and a directly following ", " / "... "
+                // "we, uh, ran" -> "we ran": drop the filler with the commas around it
+                val prev = out.lastOrNull()
+                if (prev != null && !prev.first().isLetterOrDigit() && prev.trim() == ",") out[out.size - 1] = " "
                 val next = parts.getOrNull(i + 1)
                 if (next != null && next.trim().let { it == "," || it == "..." || it == "…" || it.isEmpty() }) i++
-                // if the filler started a sentence, capitalise the next word later
                 i++
                 continue
             }

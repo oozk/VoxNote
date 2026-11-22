@@ -13,7 +13,9 @@
 | `ModelInspectorTest` | GGML Whisper detection (size, quantization, language), GGUF/safetensors/PyTorch/HTML/truncated rejection, memory verdicts |
 | `ExportersTest` | SRT, VTT, TXT, timestamped TXT, DOCX (valid ZIP, well-formed escaped XML) |
 | `VocabularyRepositoryTest`, `TranscriptionRepositoryTest` (Robolectric + Room) | CRUD, duplicates, 2 000-keyword import, merge, search, categories; accept/reject/undo/stale suggestions, find and replace, export, queue, resume and restart, interruption marking, delete |
-| `NativeEngineHostTest` | **the real JNI + whisper.cpp code and a real model**: auto language detection, JFK transcription, token counting, prompt and boost, a 72 s file in 3 chunks with continuous timestamps, cancellation |
+| `NativeEngineHostTest` | **the real JNI + whisper.cpp code and a real model**: auto language detection, JFK transcription, token counting, prompt and boost, a 72 s file in 3 chunks with continuous timestamps, cancellation, **Silero VAD** (8 s of leading silence skipped, timestamps preserved), segment confidence |
+| `TextCleanupTest`, `EnergyEndpointerTest`, `GgufInspectorTest`, `SpeakerAndCaptionTest` | filler removal (language-gated), stutters, replacements, the language starter; speech start/end, noisy backgrounds, timeouts, silence trimming; GGUF classification (speech, speaker, LLM, damaged); speaker assignment; vocabulary following engine capabilities; live captions draft/final logic |
+| `TranscribeCppHostTest` (native) | **real transcribe.cpp JNI**: Parakeet transcribes JFK, GGUF inspection of real files, Sortformer separates two voices |
 | `EndToEndPipelineTest` (Robolectric + native) | import model, verify, import audio, transcribe with vocabulary, suggestions, export; cancel mid-run then resume without duplicates |
 
 The native suites need the JNI library built for your computer and a model:
@@ -29,7 +31,18 @@ curl -L -o ggml-tiny.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/ma
 ```bash
 ./gradlew :app:testDebugUnitTest -Pnative.lib.path=$PWD/build-host/libtranscriber_jni.so -Ptest.model.path=$PWD/ggml-tiny.bin
 ```
-Without those properties the native suites are skipped. No test uses the network.
+For the second engine and VAD:
+```bash
+cmake -S engine-transcribe/src/main/cpp -B build-host-tc -G Ninja -DCMAKE_BUILD_TYPE=Release
+```
+```bash
+cmake --build build-host-tc --target transcribe_jni
+```
+Then add `-Ptc.lib.path=$PWD/build-host-tc/libtranscribe_jni.so -Ptc.model.path=parakeet-tdt_ctc-110m-Q8_0.gguf
+-Ptc.diarize.path=diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf -Pvad.model.path=app/src/main/assets/vad/ggml-silero-v6.2.0.bin`.
+
+Without those properties the native suites are skipped. No test uses the network. Unit tests run on a
+Java 17 runtime (Robolectric 4.9); Gradle provisions one automatically if needed.
 
 ## On-device checklist (airplane mode)
 Turn on **airplane mode** (Wi-Fi and mobile data off) before step 1.
@@ -46,3 +59,8 @@ Turn on **airplane mode** (Wi-Fi and mobile data off) before step 1.
 10. Low memory: try `large-v3` on a 4 GB phone → refused with an explanation, no crash.
 11. Force-stop the app during a transcription → reopen → *Interrupted* → Resume.
 12. Settings → Delete all app data → everything is gone.
+13. Voice input: Home › Voice input › Try voice input → speak → text shown. In SwiftKey (or a browser's voice search), tap the mic → VoxNote panel → text inserted. Enable the VoxNote keyboard, switch to it from HeliBoard, dictate.
+14. Models → import `parakeet-tdt_ctc-110m-Q8_0.gguf` → *Compatible · verified* (transcribe.cpp) → transcribe a file with it.
+15. Import the Sortformer model → transcribe a two-person conversation with *Identify speakers* → rename and merge speakers → export VTT and Markdown.
+16. Record with *Live captions* on → text appears while speaking. Home › Live captions for device audio → play a podcast → captions → Stop and save → transcribe.
+17. Quick Settings tile and home-screen widget start a recording. Save a mode on the Transcribe screen and apply it.

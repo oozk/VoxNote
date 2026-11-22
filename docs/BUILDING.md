@@ -6,7 +6,10 @@
   (Android Studio installs these automatically from the Gradle files; on the command line:
   `sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"`)
 
-The whisper.cpp sources are vendored, so the native build needs no network access.
+The whisper.cpp and transcribe.cpp sources are vendored (`app/src/main/cpp/third_party`,
+`engine-transcribe/src/main/cpp/third_party`), so the native build needs no network access. The
+project has two Gradle modules: `app`, and `engine-transcribe` (the second engine, an Android library).
+A clean build compiles ggml twice per ABI and takes a few minutes.
 
 ## Android Studio
 Open the project folder, wait for the Gradle sync, then run the `app` configuration on a device.

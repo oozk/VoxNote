@@ -5,7 +5,7 @@ import java.io.OutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
-data class ExportSegment(val startMs: Long, val endMs: Long, val text: String)
+data class ExportSegment(val startMs: Long, val endMs: Long, val text: String, val speaker: String? = null)
 
 data class ExportDocument(
     val title: String,
@@ -19,6 +19,8 @@ enum class ExportFormat(val label: String, val extension: String, val mimeType: 
     DOCX("Word document (.docx)", "docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
     SRT("SRT subtitles (.srt)", "srt", "application/x-subrip"),
     VTT("WebVTT subtitles (.vtt)", "vtt", "text/vtt"),
+    MARKDOWN("Markdown (.md)", "md", "text/markdown"),
+    JSON("JSON with timestamps (.json)", "json", "application/json"),
 }
 
 object Exporters {
@@ -29,6 +31,8 @@ object Exporters {
             ExportFormat.SRT -> out.write(srt(doc).toByteArray())
             ExportFormat.VTT -> out.write(vtt(doc).toByteArray())
             ExportFormat.DOCX -> docx(doc, out)
+            ExportFormat.MARKDOWN -> out.write(markdown(doc).toByteArray())
+            ExportFormat.JSON -> out.write(json(doc).toByteArray())
         }
     }
 
@@ -38,21 +42,66 @@ object Exporters {
     /** Segments joined into paragraphs (a new paragraph after a pause of > 2 s). */
     fun plainText(doc: ExportDocument): String = buildString {
         var prevEnd = -1L
+        var prevSpeaker: String? = null
         for (s in doc.segments) {
             val t = s.text.trim()
             if (t.isEmpty()) continue
-            if (isNotEmpty()) append(if (prevEnd >= 0 && s.startMs - prevEnd > 2000) "\n\n" else " ")
+            val newSpeaker = s.speaker != null && s.speaker != prevSpeaker
+            if (isNotEmpty()) append(if (newSpeaker || (prevEnd >= 0 && s.startMs - prevEnd > 2000)) "\n\n" else " ")
+            if (newSpeaker) append(s.speaker).append(": ")
             append(t)
             prevEnd = s.endMs
+            prevSpeaker = s.speaker ?: prevSpeaker
         }
         append('\n')
+    }
+
+    fun markdown(doc: ExportDocument): String = buildString {
+        append("# ").append(doc.title).append("\n\n")
+        for ((k, v) in doc.metadata) append("- **").append(k).append(":** ").append(v).append('\n')
+        if (doc.metadata.isNotEmpty()) append('\n')
+        var prevSpeaker: String? = null
+        for (s in doc.segments) {
+            val t = s.text.trim()
+            if (t.isEmpty()) continue
+            if (s.speaker != null && s.speaker != prevSpeaker) { append("\n**").append(s.speaker).append("**\n\n"); prevSpeaker = s.speaker }
+            append("`").append(clock(s.startMs)).append("` ").append(t).append("\n\n")
+        }
+    }
+
+    fun json(doc: ExportDocument): String = buildString {
+        append("{\n  \"title\": ").append(jsonStr(doc.title)).append(",\n  \"metadata\": {")
+        append(doc.metadata.joinToString(",") { (k, v) -> "\n    " + jsonStr(k) + ": " + jsonStr(v) })
+        append(if (doc.metadata.isEmpty()) "},\n" else "\n  },\n")
+        append("  \"segments\": [")
+        append(doc.segments.filter { it.text.isNotBlank() }.joinToString(",") { s ->
+            "\n    {\"start_ms\": ${s.startMs}, \"end_ms\": ${s.endMs}" +
+                (s.speaker?.let { ", \"speaker\": " + jsonStr(it) } ?: "") + ", \"text\": " + jsonStr(s.text.trim()) + "}"
+        })
+        append("\n  ]\n}\n")
+    }
+
+    internal fun jsonStr(s: String): String = buildString {
+        append('"')
+        for (c in s) when {
+            c == '"' -> append("\\\"")
+            c == '\\' -> append("\\\\")
+            c == '\n' -> append("\\n")
+            c == '\r' -> append("\\r")
+            c == '\t' -> append("\\t")
+            c.code < 0x20 -> append(String.format("\\u%04x", c.code))
+            else -> append(c)
+        }
+        append('"')
     }
 
     fun timestamped(doc: ExportDocument): String = buildString {
         for (s in doc.segments) {
             val t = s.text.trim()
             if (t.isEmpty()) continue
-            append('[').append(clock(s.startMs)).append(" - ").append(clock(s.endMs)).append("] ").append(t).append('\n')
+            append('[').append(clock(s.startMs)).append(" - ").append(clock(s.endMs)).append("] ")
+            s.speaker?.let { append(it).append(": ") }
+            append(t).append('\n')
         }
     }
 
@@ -63,6 +112,7 @@ object Exporters {
             if (t.isEmpty()) continue
             append(n++).append('\n')
             append(subtitleTime(s.startMs, ',')).append(" --> ").append(subtitleTime(maxOf(s.endMs, s.startMs + 1), ',')).append('\n')
+            s.speaker?.let { append(it).append(": ") }
             append(t).append("\n\n")
         }
     }
@@ -73,6 +123,7 @@ object Exporters {
             val t = s.text.trim()
             if (t.isEmpty()) continue
             append(subtitleTime(s.startMs, '.')).append(" --> ").append(subtitleTime(maxOf(s.endMs, s.startMs + 1), '.')).append('\n')
+            s.speaker?.let { append("<v ").append(it.replace(">", "")).append(">") }
             append(t.replace("-->", "->")).append("\n\n")
         }
     }
@@ -119,7 +170,7 @@ object Exporters {
 </Relationships>""")
             entry("docProps/core.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/">
-<dc:title>${xml(doc.title)}</dc:title><dc:creator>Offline Transcriber</dc:creator>
+<dc:title>${xml(doc.title)}</dc:title><dc:creator>VoxNote</dc:creator>
 </cp:coreProperties>""")
             entry("word/styles.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
@@ -136,7 +187,9 @@ object Exporters {
                 val t = s.text.trim()
                 if (t.isEmpty()) continue
                 body.append("<w:p><w:r><w:rPr><w:color w:val=\"808080\"/></w:rPr><w:t xml:space=\"preserve\">[")
-                    .append(clock(s.startMs)).append("] </w:t></w:r><w:r><w:t xml:space=\"preserve\">")
+                    .append(clock(s.startMs)).append("] </w:t></w:r>")
+                s.speaker?.let { body.append("<w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">").append(xml(it)).append(": </w:t></w:r>") }
+                body.append("<w:r><w:t xml:space=\"preserve\">")
                     .append(xml(t)).append("</w:t></w:r></w:p>")
             }
             entry("word/document.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

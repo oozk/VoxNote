@@ -47,12 +47,22 @@ fun SettingsScreen() {
         AppTopBar("Settings")
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             SectionCard("Transcription") {
-                Chooser("Default model", models.filter { it.compatible }, models.firstOrNull { it.id == st.defaultModelId }, { it.displayName },
+                Chooser("Default model", models.filter { it.compatible && it.role == "asr" }, models.firstOrNull { it.id == st.defaultModelId }, { it.displayName },
                     { m -> set { it.copy(defaultModelId = m.id) } })
                 val langs = listOf("auto" to "Automatic detection") + Languages.ALL
                 Chooser("Default language", langs, langs.firstOrNull { it.first == st.language }, { it.second }, { l -> set { it.copy(language = l.first) } })
                 Chooser("Processing quality", Quality.entries, st.quality, { "${it.label} — ${it.description}" }, { q -> set { it.copy(quality = q) } })
                 LabeledSwitch("Timestamps", "Show and export the time of each part.", st.timestamps, { v -> set { it.copy(timestamps = v) } })
+                LabeledSwitch("Skip silence (Silero VAD)", "Transcribe only speech. Faster, and stops the model inventing text during long pauses. whisper.cpp models.",
+                    st.skipSilence, { v -> set { it.copy(skipSilence = v) } })
+                LabeledSwitch("Remove filler words", "Removes \"uh\", \"um\" and stutters like \"I I I\". The original text is kept.",
+                    st.removeFillers, { v -> set { it.copy(removeFillers = v) } })
+                LabeledSwitch("Language punctuation hint", "Starts the prompt with a punctuated sentence in the recognised language for better punctuation.",
+                    st.languageStarter, { v -> set { it.copy(languageStarter = v) } })
+                LabeledSwitch("Shade uncertain parts", "Lighter text where the engine was less confident.", st.highlightUncertain,
+                    { v -> set { it.copy(highlightUncertain = v) } })
+                LabeledSwitch("Identify speakers by default", "Needs a speaker model (Models screen).", st.identifySpeakers,
+                    { v -> set { it.copy(identifySpeakers = v) } })
                 Text("Audio part length: ${st.chunkSeconds} s", style = MaterialTheme.typography.bodyLarge)
                 Slider(st.chunkSeconds.toFloat(), { v -> set { it.copy(chunkSeconds = (v / 30).toInt() * 30) } }, valueRange = 30f..600f, steps = 18)
                 Text("Long recordings are processed in parts of this length (cut at pauses). Shorter parts use less memory and save progress more often.",
@@ -82,16 +92,35 @@ fun SettingsScreen() {
                 LabeledSwitch("Preserve original transcription", "Keep the engine's original text so edits and corrections can be undone.",
                     st.preserveOriginal, { v -> set { it.copy(preserveOriginal = v) } })
             }
+            SectionCard("Voice input in other apps") {
+                Chooser("Stop listening after a pause of", listOf(800, 1200, 1500, 2000, 3000), st.voiceSilenceMs,
+                    { "${it / 1000.0} seconds" }, { v -> set { it.copy(voiceSilenceMs = v) } })
+                Text("See Home › Voice input for how to use VoxNote from your keyboard.", style = MaterialTheme.typography.bodySmall)
+            }
             SectionCard("Recording & export") {
                 LabeledSwitch("Transcribe after recording", null, st.transcribeAfterRecording, { v -> set { it.copy(transcribeAfterRecording = v) } })
+                LabeledSwitch("Live captions while recording", "Uses more battery.", st.liveCaptions, { v -> set { it.copy(liveCaptions = v) } })
+                LabeledSwitch("Pause other audio while recording", "Music and videos pause during recording and dictation.", st.pauseOtherAudio,
+                    { v -> set { it.copy(pauseOtherAudio = v) } })
+                Chooser("Stop recording after silence", listOf(0, 5, 10, 30, 60), st.recordingAutoStopSec,
+                    { if (it == 0) "Never" else "$it seconds" }, { v -> set { it.copy(recordingAutoStopSec = v) } })
                 Chooser("Preferred export format", ExportFormat.entries, st.exportFormat, { it.label }, { f -> set { it.copy(exportFormat = f) } })
+            }
+            val modes by c.db.modes().observeAll().collectAsStateWithLifecycle(emptyList())
+            if (modes.isNotEmpty()) SectionCard("Saved modes") {
+                modes.forEach { m ->
+                    androidx.compose.foundation.layout.Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Text(m.name, Modifier.weight(1f))
+                        androidx.compose.material3.TextButton(onClick = { scope.launch { c.db.modes().delete(m.id) } }) { Text("Delete") }
+                    }
+                }
             }
             SectionCard("Privacy") {
                 InfoBanner("This app has no internet permission. Recording, transcription, vocabulary, editing, export and history all work in airplane mode. " +
                     "No analytics, no ads, no accounts, no cloud backup.", icon = Icons.Outlined.Lock)
                 BigButton("Delete all app data", Icons.Filled.DeleteForever, { confirmWipe = true }, secondary = true)
             }
-            Text("Offline Transcriber ${BuildConfig.VERSION_NAME} · ${c.engines.systemInfo()}", style = MaterialTheme.typography.bodySmall,
+            Text("VoxNote ${BuildConfig.VERSION_NAME} · ${c.engines.systemInfo()} · ${c.engines.secondEngineInfo()}", style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }

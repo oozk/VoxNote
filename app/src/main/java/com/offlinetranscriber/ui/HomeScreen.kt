@@ -11,6 +11,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.ClosedCaption
+import androidx.compose.material.icons.filled.Keyboard
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
@@ -22,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -37,10 +41,10 @@ fun HomeScreen() {
     val keywordCount by c.vocabulary.count.collectAsStateWithLifecycle(0)
     val run by c.runner.state.collectAsStateWithLifecycle()
     val history by c.transcriptions.history.collectAsStateWithLifecycle(emptyList())
-    val defaultModel = models.firstOrNull { it.id == settings?.defaultModelId } ?: models.firstOrNull()
+    val defaultModel = models.firstOrNull { it.id == settings?.defaultModelId } ?: models.firstOrNull { it.role == "asr" }
 
     Column(Modifier.fillMaxSize()) {
-        AppTopBar("Offline Transcriber")
+        AppTopBar("VoxNote")
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             InfoBanner("Works fully offline. Audio, text and keywords never leave this device — this app has no internet permission.", icon = Icons.Outlined.Lock)
 
@@ -71,6 +75,9 @@ fun HomeScreen() {
                 BigButton("Settings", Icons.Filled.Settings, { app.goTop("settings") }, Modifier.weight(1f), secondary = true)
             }
 
+            VoiceInputCard()
+            BigButton("Live captions for device audio", Icons.Filled.ClosedCaption, { app.go("live") }, secondary = true)
+
             if (history.isNotEmpty()) {
                 SectionCard("Recent") {
                     history.take(4).forEach { t ->
@@ -84,6 +91,39 @@ fun HomeScreen() {
                 }
             }
         }
+    }
+}
+
+/** Explains and tests the three ways other apps can use VoxNote for dictation. */
+@Composable
+private fun VoiceInputCard() {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val app = LocalApp.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var open by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
+    val tester = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { r ->
+        val text = r.data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+        scope.launch { app.snackbar.showSnackbar(text?.let { "Heard: $it" } ?: "No text") }
+    }
+    SectionCard("Voice input in other apps", Modifier.clickable { open = !open }) {
+        Text("Dictate into any app with VoxNote, on the device.", style = MaterialTheme.typography.bodyMedium)
+        if (open) {
+            Text("• Keyboards like SwiftKey and website voice search: tap their microphone and pick VoxNote (choose \"Always\").\n" +
+                "• Apps using Android's speech service: Settings › Apps › Default apps › Voice input (or Assist & voice input) › VoxNote.\n" +
+                "• HeliBoard, FlorisBoard, Fossify and similar: enable the VoxNote voice keyboard; their mic key switches to it.\n" +
+                "• Gboard only uses Google's voice typing and cannot use VoxNote.",
+                style = MaterialTheme.typography.bodySmall)
+            BigButton("Try voice input", Icons.Filled.Mic, {
+                tester.launch(android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).setPackage(ctx.packageName))
+            }, secondary = true)
+            BigButton("Enable the voice keyboard", Icons.Filled.Keyboard, {
+                ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_INPUT_METHOD_SETTINGS))
+            }, secondary = true)
+            BigButton("Choose voice input service", Icons.Filled.Settings, {
+                runCatching { ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_VOICE_INPUT_SETTINGS)) }
+                    .onFailure { ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_SETTINGS)) }
+            }, secondary = true)
+        } else Text("Tap to see how", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
     }
 }
 

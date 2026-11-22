@@ -66,6 +66,14 @@ class RecordingService : LifecycleService() {
                 val name = intent.getStringExtra(EXTRA_NAME)?.ifBlank { null } ?: defaultName()
                 transcribeAfter = intent.getBooleanExtra(EXTRA_TRANSCRIBE, false)
                 val file = container.storage.uniqueFile(container.storage.audioDir, "$name.wav")
+                val settings = kotlinx.coroutines.runBlocking { container.settings.current() }
+                recorder.autoStopSilenceMs = settings.recordingAutoStopSec * 1000
+                if (settings.pauseOtherAudio) focus.pause()
+                if (settings.liveCaptions) {
+                    val cap = container.newCaptioner(settings.language)
+                    container.captioner.value = cap
+                    recorder.frameListener = { cap.feed(it) }
+                } else recorder.frameListener = null
                 recorder.start(name, file) { f, durationMs -> onRecordingFinished(name, f, durationMs) }
                 lifecycleScope.launch {
                     @OptIn(FlowPreview::class)
@@ -84,7 +92,12 @@ class RecordingService : LifecycleService() {
         return START_NOT_STICKY
     }
 
+    private val focus by lazy { AudioFocusPauser(this) }
+
     private fun onRecordingFinished(name: String, file: File, durationMs: Long) {
+        container.recorder.frameListener = null
+        focus.resume()
+        container.captioner.value?.finish()
         lifecycleScope.launch {
             val id = runCatching { container.transcriptions.createFromRecording(file, name, durationMs) }.getOrNull()
             if (id != null && transcribeAfter) {
@@ -114,7 +127,7 @@ class RecordingService : LifecycleService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Offline Transcriber")
+            .setContentTitle("VoxNote")
             .setContentText(text)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

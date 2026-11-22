@@ -101,7 +101,7 @@ fun AppRoot(appVm: AppViewModel) {
             drawerContent = {
                 ModalDrawerSheet {
                     Column(Modifier.padding(16.dp)) {
-                        Text("Offline Transcriber", style = MaterialTheme.typography.titleLarge)
+                        Text("VoxNote", style = MaterialTheme.typography.titleLarge)
                         Text("Everything stays on this device", style = MaterialTheme.typography.bodySmall)
                     }
                     MainDestinations.forEach { d ->
@@ -133,7 +133,10 @@ fun AppRoot(appVm: AppViewModel) {
             ) { padding ->
                 NavHost(nav, startDestination = "home", modifier = Modifier.padding(padding)) {
                     composable("home") { HomeScreen() }
-                    composable("record") { RecordScreen() }
+                    composable("record?autostart={autostart}", arguments = listOf(navArgument("autostart") { type = NavType.BoolType; defaultValue = false })) {
+                        RecordScreen(autoStart = it.arguments?.getBoolean("autostart") == true)
+                    }
+                    composable("live") { LiveScreen() }
                     composable("transcribe?job={job}", arguments = listOf(navArgument("job") { type = NavType.LongType; defaultValue = -1L })) {
                         TranscribeScreen(it.arguments?.getLong("job")?.takeIf { id -> id > 0 })
                     }

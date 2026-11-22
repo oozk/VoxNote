@@ -48,4 +48,26 @@ class ExportersTest {
         // must be well-formed XML
         javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(ByteArrayInputStream(body.toByteArray()))
     }
+
+    private val talk = ExportDocument("Call", listOf(
+        ExportSegment(0, 2000, "Hello there.", "Alice"),
+        ExportSegment(2000, 4000, "Hi \"Bob\" here.", "Bob"),
+        ExportSegment(4000, 5000, "Great.", "Bob"),
+    ), listOf("Model" to "parakeet"))
+
+    @Test fun speakerNamesInTextFormats() {
+        assertEquals("Alice: Hello there.\n\nBob: Hi \"Bob\" here. Great.\n", Exporters.plainText(talk))
+        assertTrue(Exporters.srt(talk).contains("00:00:00,000 --> 00:00:02,000\nAlice: Hello there."))
+        assertTrue(Exporters.vtt(talk).contains("<v Bob>Hi \"Bob\" here."))
+        assertTrue(Exporters.timestamped(talk).lines()[0].endsWith("Alice: Hello there."))
+    }
+
+    @Test fun markdownAndJson() {
+        val md = Exporters.markdown(talk)
+        assertTrue(md.startsWith("# Call\n\n- **Model:** parakeet"))
+        assertTrue(md.contains("**Bob**\n\n`00:02` Hi"))
+        val json = Exporters.json(talk)
+        assertTrue(json, json.contains("{\"start_ms\": 2000, \"end_ms\": 4000, \"speaker\": \"Bob\", \"text\": \"Hi \\\"Bob\\\" here.\"}"))
+        assertEquals("\"a\\nb\\u0001\"", Exporters.jsonStr("a\nb\u0001"))
+    }
 }

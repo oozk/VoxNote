@@ -35,11 +35,15 @@ class ModelInspectorTest {
         assertEquals("large-v3-turbo", turbo.sizeClass)
     }
 
-    @Test fun rejectsGgufWithExplanation() {
-        val r = inspect("GGUF".toByteArray() + ByteArray(60))
-        assertFalse(r.compatible)
-        assertEquals(ModelFormat.GGUF, r.format)
-        assertTrue(r.message.contains("GGML"))
+    @Test fun ggufIsHandedToTheMetadataCheck() {
+        val bytes = "GGUF".toByteArray() + ByteArray(60)
+        val head = inspect(bytes)                       // header only: not decided yet
+        assertFalse(head.compatible)
+        assertEquals(ModelFormat.GGUF, head.format)
+        assertEquals(ENGINE_TRANSCRIBE, head.engine)
+        val full = ModelInspector.inspect(ByteArrayInputStream(bytes), 200_000_000) { ByteArrayInputStream(bytes) }
+        assertFalse(full.compatible)                    // version 0 header: damaged
+        assertTrue(full.message, full.message.contains("damaged"))
     }
 
     @Test fun rejectsOtherFormats() {

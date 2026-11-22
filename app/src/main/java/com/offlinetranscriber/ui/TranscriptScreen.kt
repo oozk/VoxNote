@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -105,6 +106,7 @@ fun TranscriptScreen(id: Long) {
     var showRename by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
+    var speakerMenu by remember { mutableStateOf<SegmentEntity?>(null) }
     val listState = rememberLazyListState()
     val player = rememberPlayer(job?.audioPath)
 
@@ -177,13 +179,29 @@ fun TranscriptScreen(id: Long) {
                     if (segments.isEmpty()) Text("No text yet.", style = MaterialTheme.typography.bodyLarge)
                 }
             }
-            items(segments, key = { it.id }) { seg ->
+            if (settings?.highlightUncertain != false && segments.any { (it.confidence ?: 1f) < UNCERTAIN }) item {
+                Text("Parts shown in lighter text are ones the engine was less sure about — worth a listen.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            itemsIndexed(segments, key = { _, it -> it.id }) { i, seg ->
                 val active = player.positionMs in seg.startMs until seg.endMs && player.playing
+                if (seg.speaker != null && seg.speaker != segments.getOrNull(i - 1)?.speaker) {
+                    SpeakerLabel(t.speakerName(seg.speaker) ?: "", seg.speaker) { speakerMenu = seg }
+                }
                 SegmentRow(seg, query, pendingBySegment[seg.id].orEmpty(), showTimestamps && (settings?.timestamps != false), active,
+                    uncertain = settings?.highlightUncertain != false && (seg.confidence ?: 1f) < UNCERTAIN,
                     onSeek = { player.seekAndPlay(seg.startMs) }, onEdit = { editing = seg })
                 HorizontalDivider()
             }
         }
+    }
+
+    speakerMenu?.let { seg ->
+        if (t != null) SpeakerDialog(t, seg, segments.mapNotNull { it.speaker }.distinct().sorted(),
+            onRename = { sp, name -> scope.launch { c.transcriptions.renameSpeaker(id, sp, name) } },
+            onMerge = { from, to -> scope.launch { c.transcriptions.mergeSpeakers(id, from, to) } },
+            onAssign = { sp -> scope.launch { c.transcriptions.setSegmentSpeaker(seg.id, sp) } },
+            onDismiss = { speakerMenu = null })
     }
 
     editing?.let { seg ->
@@ -218,7 +236,7 @@ fun TranscriptScreen(id: Long) {
 
 @Composable
 private fun SegmentRow(seg: SegmentEntity, query: String, pending: List<SuggestionEntity>, showTime: Boolean, active: Boolean,
-                       onSeek: () -> Unit, onEdit: () -> Unit) {
+                       uncertain: Boolean, onSeek: () -> Unit, onEdit: () -> Unit) {
     val hl = MaterialTheme.colorScheme.tertiaryContainer
     val sugColor = MaterialTheme.colorScheme.primary
     val text: AnnotatedString = remember(seg.text, query, pending, hl) {
@@ -240,9 +258,50 @@ private fun SegmentRow(seg: SegmentEntity, query: String, pending: List<Suggesti
             Text(Exporters.clock(seg.startMs), Modifier.clickable(onClick = onSeek).padding(end = 10.dp, top = 2.dp),
                 style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
         }
-        SelectionContainer(Modifier.weight(1f)) { Text(text, style = MaterialTheme.typography.bodyLarge) }
+        SelectionContainer(Modifier.weight(1f)) {
+            Text(text, style = MaterialTheme.typography.bodyLarge,
+                color = if (uncertain) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f) else androidx.compose.ui.graphics.Color.Unspecified)
+        }
         IconButton(onClick = onEdit) { Icon(Icons.Filled.Edit, "Edit this part", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
+}
+
+private const val UNCERTAIN = 0.6f
+
+private val SpeakerColors = listOf(0xFF1E88E5, 0xFFD81B60, 0xFF43A047, 0xFFFB8C00, 0xFF8E24AA, 0xFF00897B, 0xFF6D4C41, 0xFF3949AB)
+
+@Composable
+private fun SpeakerLabel(name: String, speaker: Int, onClick: () -> Unit) {
+    val color = androidx.compose.ui.graphics.Color(SpeakerColors[(speaker - 1).mod(SpeakerColors.size)])
+    TextButton(onClick = onClick, modifier = Modifier.padding(top = 8.dp)) {
+        Text(name, color = color, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun SpeakerDialog(
+    t: com.offlinetranscriber.data.TranscriptionEntity, seg: SegmentEntity, speakers: List<Int>,
+    onRename: (Int, String) -> Unit, onMerge: (Int, Int) -> Unit, onAssign: (Int?) -> Unit, onDismiss: () -> Unit,
+) {
+    val sp = seg.speaker ?: return
+    var name by remember { mutableStateOf(t.speakerNameMap()[sp] ?: "") }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(t.speakerName(sp) ?: "Speaker") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(name, { name = it }, label = { Text("Name for everyone's parts of ${t.speakerName(sp)}") }, singleLine = true)
+                val others = speakers.filter { it != sp }
+                if (others.isNotEmpty()) {
+                    Text("Same person as… (merge)", style = MaterialTheme.typography.labelLarge)
+                    others.forEach { o -> TextButton(onClick = { onMerge(sp, o); onDismiss() }) { Text("Merge into ${t.speakerName(o)}") } }
+                    Text("Only this part was said by…", style = MaterialTheme.typography.labelLarge)
+                    others.forEach { o -> TextButton(onClick = { onAssign(o); onDismiss() }) { Text(t.speakerName(o) ?: "") } }
+                }
+                TextButton(onClick = { onAssign((speakers.maxOrNull() ?: 0) + 1); onDismiss() }) { Text("This part is a new speaker") }
+                Text("Speaker labels come from the on-device speaker model and can be wrong.", style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = { TextButton(onClick = { onRename(sp, name); onDismiss() }) { Text("Save name") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } })
 }
 
 @Composable

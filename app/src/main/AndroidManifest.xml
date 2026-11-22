@@ -16,6 +16,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
@@ -68,15 +69,81 @@
             </intent-filter>
         </activity>
 
+        <!-- Voice input for other apps: popup (keyboards, website voice search) -->
+        <activity
+            android:name=".voice.RecognizeActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.offlinetranscriber.voice"
+            android:theme="@style/Theme.OfflineTranscriber.VoicePanel">
+            <intent-filter>
+                <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Voice input for other apps: system speech recognizer (SpeechRecognizer API) -->
+        <service
+            android:name=".voice.VoiceRecognitionService"
+            android:exported="true"
+            android:label="@string/voice_service_label"
+            android:permission="android.permission.BIND_RECOGNITION_SERVICE"
+            android:foregroundServiceType="microphone">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data android:name="android.speech" android:resource="@xml/recognition_service" />
+        </service>
+
+        <!-- Voice input for other apps: voice keyboard -->
+        <service
+            android:name=".voice.VoiceKeyboardService"
+            android:exported="true"
+            android:label="@string/voice_service_label"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data android:name="android.view.im" android:resource="@xml/method" />
+        </service>
+
         <service
             android:name=".transcription.TranscriptionService"
             android:exported="false"
             android:foregroundServiceType="dataSync|mediaProcessing" />
 
         <service
+            android:name=".audio.DeviceAudioCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <service
             android:name=".audio.RecordingService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+
+        <service
+            android:name=".shortcuts.RecordTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_notification"
+            android:label="@string/tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name=".shortcuts.RecordWidgetProvider"
+            android:exported="false"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_record_info" />
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"

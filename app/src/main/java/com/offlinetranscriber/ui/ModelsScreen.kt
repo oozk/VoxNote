@@ -139,7 +139,10 @@ fun ModelsScreen() {
                     Row {
                         Text(m.displayName, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                         if (isDefault) StatusChip("Default", MaterialTheme.colorScheme.primary)
+                        if (m.role == "diarize") StatusChip("Speaker model", MaterialTheme.colorScheme.tertiary)
                     }
+                    Text("Engine: ${m.engine}" + if (m.languages.isNotBlank()) " · languages: ${m.languages.split(',').let { l -> if (l.size > 6) "${l.size}" else l.joinToString(", ") }}" else "",
+                        style = MaterialTheme.typography.bodySmall)
                     Text("${Format.bytes(m.sizeBytes)} · ${m.format}" + listOfNotNull(m.sizeClass, m.quantization,
                         m.multilingual?.let { if (it) "multilingual" else "English-only" }).joinToString(" · ", prefix = " · "),
                         style = MaterialTheme.typography.bodySmall)
@@ -153,7 +156,7 @@ fun ModelsScreen() {
                     if (m.contentUri != null) Text("Used in place (not copied).", style = MaterialTheme.typography.bodySmall)
                     m.notes?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        if (!isDefault && m.compatible) TextButton(onClick = { scope.launch { c.models.setDefault(m.id) } }) { Text("Make default") }
+                        if (!isDefault && m.compatible && m.role == "asr") TextButton(onClick = { scope.launch { c.models.setDefault(m.id) } }) { Text("Make default") }
                         TextButton(enabled = task == null, onClick = { vm.verify(m) }) { Text("Verify") }
                         TextButton(onClick = { removing = m }) { Text("Remove", color = MaterialTheme.colorScheme.error) }
                     }
@@ -161,12 +164,12 @@ fun ModelsScreen() {
             }
 
             Text("Get models from Hugging Face (optional)", style = MaterialTheme.typography.titleMedium)
-            InfoBanner("Offline Transcriber has no internet access. These buttons open your web browser to download a file; " +
+            InfoBanner("VoxNote has no internet access. These buttons open your web browser to download a file; " +
                 "afterwards tap \"Import a model file\" and pick it from Downloads. Nothing is downloaded without you.")
             ModelCatalogue.models.forEach { cm ->
                 SectionCard {
                     Text(cm.title, fontWeight = FontWeight.SemiBold)
-                    Text("${cm.fileName} · ~${cm.approxSizeMb} MB download · ~${cm.approxRamMb} MB RAM" + if (cm.englishOnly) " · English only" else "",
+                    Text("${cm.fileName} · ~${cm.approxSizeMb} MB download · ~${cm.approxRamMb} MB RAM" + (if (cm.englishOnly) " · English only" else "") + " · ${cm.engine}",
                         style = MaterialTheme.typography.bodySmall)
                     Text(cm.note, style = MaterialTheme.typography.bodySmall)
                     Row {
@@ -176,8 +179,9 @@ fun ModelsScreen() {
                 }
             }
             BigButton("Open the whisper.cpp model list", Icons.Filled.OpenInBrowser, { openBrowser(ModelCatalogue.REPOSITORY_URL) }, secondary = true)
-            Text("Only Whisper models in whisper.cpp GGML format (ggml-*.bin) are supported. Compatibility is checked from the file itself " +
-                "and confirmed by loading it; GGUF, safetensors and PyTorch files are detected and rejected with an explanation.",
+            Text("Two engines are built in: whisper.cpp for Whisper GGML files (ggml-*.bin) and transcribe.cpp for GGUF speech models " +
+                "(Parakeet, Whisper GGUF, Moonshine, Canary, SenseVoice, …) and the Sortformer speaker model. Compatibility is read from the " +
+                "file itself and confirmed by loading it; language models (LLMs), safetensors and PyTorch files are rejected with an explanation.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }

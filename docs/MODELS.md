@@ -1,7 +1,22 @@
-# Importing Whisper models from Hugging Face
+# Importing speech models from Hugging Face
 
-The app runs Whisper models in **whisper.cpp GGML format** (`ggml-*.bin`). These are published at
-<https://huggingface.co/ggerganov/whisper.cpp/tree/main>.
+VoxNote has two engines:
+
+* **whisper.cpp**: Whisper models in GGML format (`ggml-*.bin`) from
+  <https://huggingface.co/ggerganov/whisper.cpp/tree/main>.
+* **transcribe.cpp**: GGUF speech models from <https://huggingface.co/handy-computer>, for example:
+
+| File | Use | Size |
+|---|---|---|
+| `parakeet-tdt_ctc-110m-Q8_0.gguf` | Very fast English with punctuation | 135 MB |
+| `parakeet-tdt-0.6b-v3-Q8_0.gguf` | 25 European languages, high accuracy, much faster than Whisper of similar quality | 740 MB |
+| `moonshine-base-Q8_0.gguf` | Smallest fast English | 77 MB |
+| `SenseVoiceSmall-Q8_0.gguf` | Chinese, Cantonese, English, Japanese, Korean | 253 MB |
+| `diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf` | **Speaker model** (labels who is speaking; it does not transcribe) | 139 MB |
+
+The Models screen lists these with "Download in browser" buttons. Import them like any other model;
+the app detects the engine and role from the file. A speaker model turns on *Identify speakers*.
+Parakeet is CC-BY-4.0 and Sortformer uses the NVIDIA Open Model License.
 
 > The app itself has no internet access. Downloading is done by you, in your web browser or on a
 > computer. The app then imports the file from local storage. Nothing downloads automatically.
@@ -40,8 +55,9 @@ Download the `.bin` file, copy it to the phone (USB, SD card…) and import it a
 The app does not trust file names. It reads the header and reports:
 
 * **Compatible**: a Whisper GGML model. Size class, weight type and language support are shown.
-* **GGUF**: rejected. The bundled engine loads Whisper only in GGML `.bin` format; GGUF files are
-  usually text LLMs.
+* **GGUF**: the metadata is read. Speech architectures supported by transcribe.cpp are accepted and
+  Sortformer is accepted as a speaker model. Text LLMs (llama, qwen, gemma, …), VAD and language-ID files
+  are rejected with an explanation.
 * **safetensors / PyTorch (.pt)**: rejected, with a pointer to whisper.cpp's conversion scripts
   (`models/convert-h5-to-ggml.py`, `convert-pt-to-ggml.py`).
 * **HTML**: the browser saved the web page instead of the file. Use the download (↓) link.

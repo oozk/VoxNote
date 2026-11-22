@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Offline Transcriber</string>
+    <string name="app_name">VoxNote</string>
+    <string name="voice_service_label">VoxNote (on-device)</string>
+    <string name="widget_description">Record or transcribe with one tap</string>
+    <string name="tile_label">VoxNote record</string>
 </resources>

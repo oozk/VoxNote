@@ -5,6 +5,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -90,6 +91,7 @@ fun VocabularyScreen() {
     var confirmDelete by remember { mutableStateOf(false) }
     var manageCategories by remember { mutableStateOf(false) }
     var exportCsv by remember { mutableStateOf(true) }
+    var tab by rememberSaveable { mutableStateOf(0) }
 
     val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/*")) { uri: Uri? ->
         if (uri != null) scope.launch {
@@ -120,6 +122,11 @@ fun VocabularyScreen() {
                 if (visible.isNotEmpty()) DropdownMenuItem(text = { Text("Select all shown") }, onClick = { menu = false; selection = visible.map { it.id }.toSet() })
             }
         }
+        androidx.compose.material3.TabRow(selectedTabIndex = tab) {
+            androidx.compose.material3.Tab(tab == 0, { tab = 0 }, text = { Text("Keywords ($total)") })
+            androidx.compose.material3.Tab(tab == 1, { tab = 1 }, text = { Text("Replacements") })
+        }
+        if (tab == 1) { ReplacementsPanel(); return@Column }
         LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -374,4 +381,78 @@ internal fun decodeText(bytes: ByteArray): String = when {
     bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte() -> String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
     bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte() -> String(bytes, 2, bytes.size - 2, Charsets.UTF_16BE)
     else -> String(bytes, Charsets.UTF_8).removePrefix("﻿")
+}
+
+/** Exact "find -> replace" rules applied after every transcription and dictation. */
+@Composable
+private fun ReplacementsPanel() {
+    val c = LocalApp.current.appVm.container
+    val scope = rememberCoroutineScope()
+    val rules by c.vocabulary.replacements.collectAsStateWithLifecycle(emptyList())
+    var editing by remember { mutableStateOf<com.offlinetranscriber.data.WordReplacementEntity?>(null) }
+    var adding by remember { mutableStateOf(false) }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                InfoBanner("Replacements change exact words or phrases automatically, e.g. \"acme corp\" → \"ACME Corp.\" " +
+                    "or \"new paragraph\" → a line break. Use keywords (other tab) for fuzzy spelling help.")
+                Button(onClick = { adding = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
+                    Icon(Icons.Filled.Add, null, Modifier.padding(end = 10.dp)); Text("ADD REPLACEMENT", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        items(rules, key = { it.id }) { r ->
+            Row(Modifier.fillMaxWidth().clickable { editing = r }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("\"${r.find}\"  →  \"${r.replace.replace("\n", "⏎")}\"", fontWeight = FontWeight.Medium)
+                    Text(listOfNotNull(if (r.wholeWord) "whole words" else "anywhere", if (r.matchCase) "match case" else null).joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                androidx.compose.material3.Switch(r.enabled, { v -> scope.launch { c.vocabulary.setReplacementEnabled(r, v) } })
+            }
+            HorizontalDivider()
+        }
+        if (rules.isEmpty()) item { Text("No replacements yet.", Modifier.padding(8.dp)) }
+    }
+    if (adding || editing != null) ReplacementEditor(editing) { adding = false; editing = null }
+}
+
+@Composable
+private fun ReplacementEditor(existing: com.offlinetranscriber.data.WordReplacementEntity?, onDismiss: () -> Unit) {
+    val c = LocalApp.current.appVm.container
+    val scope = rememberCoroutineScope()
+    var find by remember { mutableStateOf(existing?.find ?: "") }
+    var replace by remember { mutableStateOf(existing?.replace ?: "") }
+    var whole by remember { mutableStateOf(existing?.wholeWord ?: true) }
+    var matchCase by remember { mutableStateOf(existing?.matchCase ?: false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(if (existing == null) "Add replacement" else "Edit replacement") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(find, { find = it }, label = { Text("When the text says") }, singleLine = true)
+                OutlinedTextField(replace, { replace = it }, label = { Text("Write instead") }, singleLine = true,
+                    supportingText = { Text("Type \\n for a line break. Leave empty to delete the words.") })
+                Row { TextButton(onClick = { replace = "\\n" }) { Text("Line break") }; TextButton(onClick = { replace = "\\n\\n" }) { Text("New paragraph") } }
+                LabeledSwitch("Whole words only", null, whole, { whole = it })
+                LabeledSwitch("Match capitals", null, matchCase, { matchCase = it })
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = find.isNotBlank(), onClick = {
+                scope.launch {
+                    runCatching { c.vocabulary.saveReplacement(existing?.id, find, replace, whole, matchCase) }
+                        .onSuccess { onDismiss() }.onFailure { error = it.message }
+                }
+            }) { Text("Save") }
+        },
+        dismissButton = {
+            Row {
+                if (existing != null) TextButton(onClick = { scope.launch { c.vocabulary.deleteReplacement(existing.id); onDismiss() } }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        })
 }

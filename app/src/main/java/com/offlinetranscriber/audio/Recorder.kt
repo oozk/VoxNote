@@ -1,9 +1,7 @@
 package com.offlinetranscriber.audio
 
 import android.annotation.SuppressLint
-import android.media.AudioFormat
 import android.media.AudioRecord
-import android.media.MediaRecorder
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -34,9 +32,14 @@ class Recorder {
     val isActive: Boolean get() = _state.value is RecorderState.Recording
 
     @SuppressLint("MissingPermission")  // permission is requested by the UI before starting
+    /** Receives 16 kHz mono frames while recording (used for live captions). */
+    @Volatile var frameListener: ((FloatArray) -> Unit)? = null
+    /** Stop by itself after this much silence following speech (0 = never). */
+    @Volatile var autoStopSilenceMs: Int = 0
+
     fun start(name: String, file: File, onFinished: (file: File, durationMs: Long) -> Unit) {
         check(!isActive) { "Already recording" }
-        val (record, rate) = openAudioRecord() ?: run {
+        val (record, rate) = MicCapture.open() ?: run {
             _state.value = RecorderState.Error("The microphone could not be opened. Is another app using it?")
             return
         }
@@ -57,6 +60,8 @@ class Recorder {
     private fun loop(record: AudioRecord, rate: Int, name: String, file: File, onFinished: (File, Long) -> Unit) {
         val buf = ShortArray(rate / 10)  // 100 ms
         var written = 0L
+        val resampler = StreamingResampler(rate)
+        val endpointer = autoStopSilenceMs.takeIf { it > 0 }?.let { EnergyEndpointer(endSilenceMs = it, noSpeechTimeoutMs = 0) }
         var lastHeaderFlush = System.currentTimeMillis()
         var wasPaused = false
         try {
@@ -74,6 +79,13 @@ class Recorder {
                     if (n <= 0) continue
                     writer.write(buf, n)
                     written += n
+                    val listener = frameListener
+                    if (listener != null || endpointer != null) {
+                        val f = FloatArray(n) { buf[it] / 32768f }
+                        val f16 = if (resampler.isPassthrough) f else resampler.process(f)
+                        runCatching { listener?.invoke(f16) }
+                        if (endpointer?.push(f16) == EnergyEndpointer.Event.SPEECH_END) stopRequested = true
+                    }
                     _state.value = RecorderState.Recording(name, file, written * 1000 / rate, level(buf, n), false)
                     if (System.currentTimeMillis() - lastHeaderFlush > 5000) {
                         writer.flushHeader()  // a crash still leaves a playable WAV
@@ -100,19 +112,4 @@ class Recorder {
         return ((db + 60) / 60).toFloat().coerceIn(0f, 1f)
     }
 
-    @SuppressLint("MissingPermission")
-    private fun openAudioRecord(): Pair<AudioRecord, Int>? {
-        for (rate in intArrayOf(WHISPER_SAMPLE_RATE, 48_000, 44_100)) {
-            for (source in intArrayOf(MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.MIC)) {
-                val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-                if (min <= 0) continue
-                val r = try {
-                    AudioRecord(source, rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(min * 4, rate))
-                } catch (e: Exception) { null } ?: continue
-                if (r.state == AudioRecord.STATE_INITIALIZED) return r to rate
-                r.release()
-            }
-        }
-        return null
-    }
 }
