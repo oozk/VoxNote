@@ -1,0 +1,17 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.cxx/
+.externalNativeBuild/
+captures/
+/test-models/
+*.keystore
+!debug-shared.keystore
+keystore.properties
+release.keystore
+*.apk
+*.bin
+build-host/
+.kotlin/
