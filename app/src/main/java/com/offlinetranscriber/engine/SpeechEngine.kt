@@ -9,6 +9,8 @@ interface SpeechEngine {
     val modelPath: String
     val modelType: String
     val isMultilingual: Boolean
+    /** What vocabulary assistance this engine can actually apply. */
+    val capabilities: EngineCapabilities
 
     /** Transcribe 16 kHz mono float PCM. Blocks the calling thread. */
     fun transcribe(
@@ -45,6 +47,25 @@ data class EngineOptions(
     val boostTerms: List<String> = emptyList(),
     /** Logit bonus for continuing a keyword; 0 disables the boost. */
     val boostStrength: Float = 0f,
+    /** Silero voice-activity detection: skip silence (needs [vadModelPath]). */
+    val vad: Boolean = false,
+    val vadModelPath: String? = null,
+)
+
+data class EngineCapabilities(
+    val engineName: String,
+    /** Accepts a text prompt / glossary as decoder context. */
+    val prompt: Boolean,
+    /** Supports the decoder logit keyword boost (whisper.cpp only). */
+    val decoderBoost: Boolean,
+    /** Accepts a native vocabulary list (model-specific contextual biasing). */
+    val vocabularyList: Boolean,
+    /** Built-in silence skipping with Silero VAD. */
+    val vad: Boolean,
+    /** Model labels speakers by itself. */
+    val speakers: Boolean,
+    /** Reports progress during a run. */
+    val progress: Boolean,
 )
 
 data class EngineSegment(
@@ -52,6 +73,10 @@ data class EngineSegment(
     val endMs: Long,
     val text: String,
     val noSpeechProbability: Float = 0f,
+    /** Mean token probability 0..1, or null when the engine does not report it. */
+    val confidence: Float? = null,
+    /** 1-based speaker id when the model labelled speakers. */
+    val speaker: Int? = null,
 )
 
 data class EngineResult(

@@ -6,6 +6,12 @@ import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
+const val ENGINE_WHISPER = "whisper.cpp"
+const val ENGINE_TRANSCRIBE = "transcribe.cpp"
+const val ROLE_ASR = "asr"
+const val ROLE_DIARIZE = "diarize"
+const val ROLE_VAD = "vad"
+
 /** Model file formats we can recognise from the first bytes of a file. */
 enum class ModelFormat(val label: String) {
     GGML_WHISPER("GGML (whisper.cpp)"),
@@ -41,6 +47,13 @@ data class ModelInspection(
     /** e.g. "F16", "Q5_0" */
     val quantization: String? = null,
     val multilingual: Boolean? = null,
+    /** "whisper.cpp" or "transcribe.cpp": which engine runs the file. */
+    val engine: String = ENGINE_WHISPER,
+    /** "asr" (speech-to-text), "diarize" (speaker labels) or "vad". */
+    val role: String = ROLE_ASR,
+    val displayName: String? = null,
+    val languages: List<String> = emptyList(),
+    val license: String? = null,
 ) {
     val summary: String
         get() = buildString {
@@ -67,10 +80,63 @@ object ModelInspector {
         10 to "Q2_K", 11 to "Q3_K", 12 to "Q4_K", 13 to "Q5_K", 14 to "Q6_K",
     )
 
+    /** GGUF speech architectures implemented by the bundled transcribe.cpp. */
+    val TRANSCRIBE_ASR_ARCHS = setOf(
+        "whisper", "parakeet", "canary", "canary_qwen", "cohere", "funasr_nano", "gigaam", "granite",
+        "granite5_ctc", "granite_nar", "medasr", "moonshine", "moonshine_streaming", "moss", "qwen3_asr",
+        "sensevoice", "voxtral", "voxtral_realtime",
+    )
+    private val LLM_ARCHS = setOf("llama", "qwen2", "qwen3", "gemma", "gemma2", "gemma3", "mistral", "phi3", "phi2",
+        "gpt2", "falcon", "mpt", "starcoder", "bert", "t5", "mamba", "command-r", "deepseek2", "olmo", "stablelm")
+
     fun inspect(file: File): ModelInspection =
         if (!file.exists() || !file.canRead()) {
             ModelInspection(ModelFormat.UNKNOWN, false, "File not found or not readable.")
-        } else file.inputStream().use { inspect(it, file.length()) }
+        } else {
+            val head = file.inputStream().use { inspect(it, file.length()) }
+            if (head.format == ModelFormat.GGUF) file.inputStream().use { inspectGguf(it, file.length()) } else head
+        }
+
+    /** Full check for a stream; GGUF files are re-read from [reopen] to parse their metadata. */
+    fun inspect(input: InputStream, fileSize: Long, reopen: (() -> InputStream)?): ModelInspection {
+        val head = inspect(input, fileSize)
+        return if (head.format == ModelFormat.GGUF && reopen != null) reopen().use { inspectGguf(it, fileSize) } else head
+    }
+
+    /** Classifies a GGUF file from its metadata: speech model, speaker model, VAD, or something else (e.g. an LLM). */
+    fun inspectGguf(input: InputStream, fileSize: Long): ModelInspection {
+        val h = try { GgufReader.read(input) } catch (e: Exception) {
+            return ModelInspection(ModelFormat.GGUF, false, "The GGUF file is damaged or incomplete (${e.message}). Download it again.")
+        }
+        val arch = (h.metadata["general.architecture"] as? String).orEmpty()
+        val name = h.metadata["general.name"] as? String
+        @Suppress("UNCHECKED_CAST")
+        val langs = (h.metadata["general.languages"] as? List<Any?>)?.mapNotNull { it as? String }.orEmpty()
+        val license = h.metadata["general.license"] as? String
+        val variant = h.metadata["stt.variant"] as? String
+        val ftype = (h.metadata["general.file_type"] as? Number)?.toInt()
+        val quant = ftype?.let { FTYPES[it] }
+        val base = ModelInspection(ModelFormat.GGUF, true, "", sizeClass = variant ?: arch, quantization = quant,
+            multilingual = if (langs.isEmpty()) null else langs.size > 1, engine = ENGINE_TRANSCRIBE,
+            displayName = name, languages = langs, license = license)
+        if (h.tensorCount <= 0 || fileSize in 1 until 1_000_000) {
+            return base.copy(compatible = false, message = "The GGUF file contains no model weights. Download it again.")
+        }
+        return when {
+            arch in TRANSCRIBE_ASR_ARCHS -> base.copy(role = ROLE_ASR,
+                message = "Compatible speech model for the transcribe.cpp engine (${name ?: arch}" +
+                    (if (langs.isNotEmpty()) ", ${if (langs.size > 3) "${langs.size} languages" else langs.joinToString("/")}" else "") + ").")
+            arch == "sortformer" -> base.copy(role = ROLE_DIARIZE,
+                message = "Speaker-identification model (${name ?: arch}). Used to label who is speaking; it does not transcribe.")
+            arch == "silero_vad" -> base.copy(role = ROLE_VAD, compatible = false,
+                message = "This is a voice-activity model. VoxNote already includes Silero VAD; no import needed.")
+            arch == "ecapa_tdnn" -> base.copy(compatible = false, message = "This is a language-identification model, not a speech-to-text model.")
+            arch in LLM_ARCHS || arch.isNotEmpty() && h.metadata.keys.none { it.startsWith("stt.") } -> base.copy(compatible = false,
+                message = "This GGUF file is a \"$arch\" model (a text language model), not a speech-recognition model.")
+            else -> base.copy(compatible = false,
+                message = "Unknown speech architecture \"$arch\"; this version of the transcribe.cpp engine cannot run it.")
+        }
+    }
 
     fun inspect(input: InputStream, fileSize: Long): ModelInspection {
         val header = ByteArray(64)
@@ -81,10 +147,7 @@ object ModelInspector {
         return when {
             magic == GGML_MAGIC -> inspectGgml(bb, fileSize)
             magic == GGUF_MAGIC -> ModelInspection(
-                ModelFormat.GGUF, false,
-                "This is a GGUF file. The bundled whisper.cpp engine loads Whisper models only in " +
-                    "its GGML .bin format (for example ggml-base.bin from huggingface.co/ggerganov/whisper.cpp). " +
-                    "GGUF files are typically text LLMs, not Whisper speech models.",
+                ModelFormat.GGUF, false, "GGUF file: its metadata must be read to check compatibility.", engine = ENGINE_TRANSCRIBE,
             )
             header[0] == 'P'.code.toByte() && header[1] == 'K'.code.toByte() -> ModelInspection(
                 ModelFormat.PYTORCH_ZIP, false,

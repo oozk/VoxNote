@@ -52,6 +52,8 @@ object WhisperNative {
         beamSize: Int,
         boostTerms: Array<String>?,
         boostStrength: Float,
+        vad: Boolean,
+        vadModelPath: String?,
         listener: NativeSegmentListener?,
     ): Int
     @JvmStatic external fun nativeSegmentCount(handle: Long): Int
@@ -59,5 +61,6 @@ object WhisperNative {
     @JvmStatic external fun nativeSegmentStartMs(handle: Long, index: Int): Long
     @JvmStatic external fun nativeSegmentEndMs(handle: Long, index: Int): Long
     @JvmStatic external fun nativeSegmentNoSpeechProb(handle: Long, index: Int): Float
+    @JvmStatic external fun nativeSegmentConfidence(handle: Long, index: Int): Float
     @JvmStatic external fun nativeDetectedLanguage(handle: Long): String
 }

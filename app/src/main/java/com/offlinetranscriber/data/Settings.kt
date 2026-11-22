@@ -50,6 +50,24 @@ data class AppSettings(
     val transcribeAfterRecording: Boolean = true,
     val allowLowMemoryLoad: Boolean = false,
     val onboardingDone: Boolean = false,
+    /** Silero VAD: transcribe only speech, skip silence (whisper.cpp models). */
+    val skipSilence: Boolean = true,
+    /** Remove "uh/um" and stutters (original text is kept). */
+    val removeFillers: Boolean = true,
+    /** Start the prompt with a punctuated sentence in the recognised language. */
+    val languageStarter: Boolean = true,
+    /** Voice input: stop after this many ms of silence once speech started. */
+    val voiceSilenceMs: Int = 1500,
+    /** Recording: stop automatically after this many seconds of silence (0 = never). */
+    val recordingAutoStopSec: Int = 0,
+    /** Show live captions while recording. */
+    val liveCaptions: Boolean = false,
+    /** Pause music/videos from other apps while recording. */
+    val pauseOtherAudio: Boolean = true,
+    /** Shade parts the engine was unsure about. */
+    val highlightUncertain: Boolean = true,
+    /** Identify speakers by default when a speaker model is installed. */
+    val identifySpeakers: Boolean = false,
 ) {
     fun effectiveThreads(cpuCount: Int = Runtime.getRuntime().availableProcessors()): Int {
         if (threads > 0) return threads.coerceIn(1, cpuCount.coerceAtLeast(1))
@@ -84,6 +102,15 @@ data class AppSettings(
                 transcribeAfterRecording = b("transcribeAfterRecording", d.transcribeAfterRecording),
                 allowLowMemoryLoad = b("allowLowMemoryLoad", d.allowLowMemoryLoad),
                 onboardingDone = b("onboardingDone", d.onboardingDone),
+                skipSilence = b("skipSilence", d.skipSilence),
+                removeFillers = b("removeFillers", d.removeFillers),
+                languageStarter = b("languageStarter", d.languageStarter),
+                voiceSilenceMs = m["voiceSilenceMs"]?.toIntOrNull() ?: d.voiceSilenceMs,
+                recordingAutoStopSec = m["recordingAutoStopSec"]?.toIntOrNull() ?: d.recordingAutoStopSec,
+                liveCaptions = b("liveCaptions", d.liveCaptions),
+                pauseOtherAudio = b("pauseOtherAudio", d.pauseOtherAudio),
+                highlightUncertain = b("highlightUncertain", d.highlightUncertain),
+                identifySpeakers = b("identifySpeakers", d.identifySpeakers),
             )
         }
 
@@ -107,6 +134,15 @@ data class AppSettings(
             put("transcribeAfterRecording", s.transcribeAfterRecording.toString())
             put("allowLowMemoryLoad", s.allowLowMemoryLoad.toString())
             put("onboardingDone", s.onboardingDone.toString())
+            put("skipSilence", s.skipSilence.toString())
+            put("removeFillers", s.removeFillers.toString())
+            put("languageStarter", s.languageStarter.toString())
+            put("voiceSilenceMs", s.voiceSilenceMs.toString())
+            put("recordingAutoStopSec", s.recordingAutoStopSec.toString())
+            put("liveCaptions", s.liveCaptions.toString())
+            put("pauseOtherAudio", s.pauseOtherAudio.toString())
+            put("highlightUncertain", s.highlightUncertain.toString())
+            put("identifySpeakers", s.identifySpeakers.toString())
         }
     }
 }

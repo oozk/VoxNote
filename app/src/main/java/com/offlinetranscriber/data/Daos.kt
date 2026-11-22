@@ -59,6 +59,9 @@ interface KeywordDao {
     @Query("UPDATE keywords SET category = :to WHERE category = :from")
     suspend fun moveCategory(from: String, to: String)
 
+    @Query("SELECT * FROM keywords WHERE priority = 1")
+    suspend fun priority(): List<KeywordEntity>
+
     @Query("UPDATE keywords SET hitCount = hitCount + 1 WHERE id IN (:ids)")
     suspend fun incrementHits(ids: List<Long>)
 
@@ -176,6 +179,9 @@ interface SegmentDao {
 
     @Query("DELETE FROM segments WHERE transcriptionId = :tid")
     suspend fun deleteFor(tid: Long)
+
+    @Query("UPDATE segments SET speaker = :to WHERE transcriptionId = :tid AND speaker = :from")
+    suspend fun mergeSpeaker(tid: Long, from: Int, to: Int)
 }
 
 @Dao
@@ -212,4 +218,34 @@ interface SettingDao {
 
     @Query("DELETE FROM settings")
     suspend fun deleteAll()
+}
+
+@Dao
+interface WordReplacementDao {
+    @Query("SELECT * FROM word_replacements ORDER BY find COLLATE NOCASE")
+    fun observeAll(): Flow<List<WordReplacementEntity>>
+
+    @Query("SELECT * FROM word_replacements WHERE enabled = 1")
+    suspend fun enabled(): List<WordReplacementEntity>
+
+    @Insert
+    suspend fun insert(r: WordReplacementEntity): Long
+
+    @Update
+    suspend fun update(r: WordReplacementEntity)
+
+    @Query("DELETE FROM word_replacements WHERE id = :id")
+    suspend fun delete(id: Long)
+}
+
+@Dao
+interface ModeDao {
+    @Query("SELECT * FROM modes ORDER BY name COLLATE NOCASE")
+    fun observeAll(): Flow<List<ModeEntity>>
+
+    @Insert
+    suspend fun insert(m: ModeEntity): Long
+
+    @Query("DELETE FROM modes WHERE id = :id")
+    suspend fun delete(id: Long)
 }

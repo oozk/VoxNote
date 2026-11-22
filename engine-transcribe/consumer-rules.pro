@@ -1,0 +1,2 @@
+-keep class com.offlinetranscriber.engine.tc.TranscribeNative { *; }
+-keepclasseswithmembernames,includedescriptorclasses class * { native <methods>; }

@@ -37,11 +37,15 @@ object PromptBuilder {
         useVocabulary: Boolean,
         countTokens: (String) -> Int = ::estimateTokens,
         maxBoostTerms: Int = 150,
+        /** Optional well-punctuated sentence in the target language (see [LanguageStarters]). */
+        starter: String? = null,
     ): Plan {
         val ranked = if (useVocabulary) rank(terms, seenInThisRecording) else emptyList()
         val context = previousText?.let { tailWords(it, 40) }?.takeIf { it.isNotBlank() }
         val contextTokens = context?.let { countTokens(" $it") } ?: 0
-        val budget = MAX_PROMPT_TOKENS - contextTokens.coerceAtMost(CONTEXT_TOKENS + 16)
+        val starterText = starter?.takeIf { context == null }   // only before any real context exists
+        val starterTokens = starterText?.let { countTokens(" $it") } ?: 0
+        val budget = MAX_PROMPT_TOKENS - contextTokens.coerceAtMost(CONTEXT_TOKENS + 16) - starterTokens
 
         val included = ArrayList<VocabTerm>()
         var used = if (ranked.isEmpty()) 0 else countTokens("Glossary:") + 1
@@ -54,7 +58,7 @@ object PromptBuilder {
             used += cost
         }
         val glossary = if (included.isEmpty()) null else "Glossary: " + included.joinToString(", ") { it.phrase } + "."
-        val prompt = listOfNotNull(glossary, context).joinToString(" ").ifBlank { null }
+        val prompt = listOfNotNull(starterText, glossary, context).joinToString(" ").ifBlank { null }
         val boost = ranked.take(maxBoostTerms).map { it.phrase }
         return Plan(prompt, glossary, included.map { it.id }, boost)
     }

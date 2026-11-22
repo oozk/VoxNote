@@ -54,11 +54,13 @@ class TranscriptionRepository(private val db: AppDatabase, private val storage: 
      * Queues a job. A job that has completed, or whose settings changed, restarts from
      * scratch; an interrupted job with the same settings resumes where it stopped.
      */
-    suspend fun queue(id: Long, modelId: Long?, language: String?, categories: List<String>?, restart: Boolean = false) {
+    suspend fun queue(id: Long, modelId: Long?, language: String?, categories: List<String>?, restart: Boolean = false,
+                      identifySpeakers: Boolean? = null) {
         val t = jobs.get(id) ?: return
         val settingsChanged = (modelId != null && modelId != t.modelId) ||
             (language != null && language != t.languageRequested) ||
-            (categories != null && categories.joinToString("\n") != t.vocabularyCategories)
+            (categories != null && categories.joinToString("\n") != t.vocabularyCategories) ||
+            (identifySpeakers != null && identifySpeakers != t.identifySpeakers)
         val fresh = restart || t.status == JobStatus.COMPLETED || settingsChanged || t.chunkPlan == null
         db.withTransaction {
             if (fresh) {
@@ -69,6 +71,7 @@ class TranscriptionRepository(private val db: AppDatabase, private val storage: 
                 modelId = modelId ?: t.modelId,
                 languageRequested = language ?: t.languageRequested,
                 vocabularyCategories = categories?.joinToString("\n") ?: t.vocabularyCategories,
+                identifySpeakers = identifySpeakers ?: t.identifySpeakers,
                 status = JobStatus.QUEUED, error = null,
                 nextChunk = if (fresh) 0 else t.nextChunk,
                 chunkPlan = if (fresh) null else t.chunkPlan,

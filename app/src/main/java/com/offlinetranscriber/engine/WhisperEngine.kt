@@ -11,6 +11,10 @@ class WhisperEngine private constructor(
 
     override val modelType: String = WhisperNative.nativeModelType(handle)
     override val isMultilingual: Boolean = WhisperNative.nativeIsMultilingual(handle)
+    override val capabilities = EngineCapabilities(
+        engineName = "whisper.cpp", prompt = true, decoderBoost = true, vocabularyList = false,
+        vad = true, speakers = false, progress = true,
+    )
 
     companion object {
         /** Loads a model. [WhisperNative] must already be loaded. Throws [EngineException]. */
@@ -58,6 +62,8 @@ class WhisperEngine private constructor(
             options.beamSize,
             options.boostTerms.takeIf { it.isNotEmpty() && options.boostStrength > 0f }?.toTypedArray(),
             options.boostStrength,
+            options.vad && options.vadModelPath != null,
+            options.vadModelPath,
             listener,
         )
         when (rc) {
@@ -72,6 +78,7 @@ class WhisperEngine private constructor(
                 endMs = WhisperNative.nativeSegmentEndMs(h, i),
                 text = WhisperNative.nativeSegmentText(h, i),
                 noSpeechProbability = WhisperNative.nativeSegmentNoSpeechProb(h, i),
+                confidence = WhisperNative.nativeSegmentConfidence(h, i).takeIf { it >= 0f },
             )
         }
         val lang = WhisperNative.nativeDetectedLanguage(h).takeIf { it.isNotBlank() }

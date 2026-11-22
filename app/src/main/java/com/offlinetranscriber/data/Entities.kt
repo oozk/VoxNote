@@ -1,5 +1,6 @@
 package com.offlinetranscriber.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -51,6 +52,12 @@ data class ModelEntity(
     val verifyMessage: String? = null,
     val notes: String? = null,
     val addedAt: Long = System.currentTimeMillis(),
+    /** "whisper.cpp" (GGML .bin) or "transcribe.cpp" (GGUF). */
+    @ColumnInfo(defaultValue = "whisper.cpp") val engine: String = "whisper.cpp",
+    /** "asr" = speech-to-text, "diarize" = speaker identification. */
+    @ColumnInfo(defaultValue = "asr") val role: String = "asr",
+    /** Languages declared by the model (comma separated, may be empty). */
+    @ColumnInfo(defaultValue = "") val languages: String = "",
 )
 
 object JobStatus {
@@ -97,7 +104,18 @@ data class TranscriptionEntity(
     val vocabularyNote: String? = null,
     /** Category filter used for vocabulary (empty = all). Newline separated. */
     val vocabularyCategories: String = "",
-)
+    /** Label speakers with the speaker model. */
+    @ColumnInfo(defaultValue = "0") val identifySpeakers: Boolean = false,
+    /** Speaker display names, one "id=name" per line. */
+    @ColumnInfo(defaultValue = "") val speakerNames: String = "",
+) {
+    fun speakerNameMap(): Map<Int, String> = speakerNames.lines().mapNotNull { l ->
+        val i = l.indexOf('=')
+        if (i <= 0) null else l.substring(0, i).trim().toIntOrNull()?.let { it to l.substring(i + 1).trim() }
+    }.toMap()
+
+    fun speakerName(id: Int?): String? = id?.let { speakerNameMap()[it] ?: "Speaker $it" }
+}
 
 @Entity(
     tableName = "segments",
@@ -114,6 +132,10 @@ data class SegmentEntity(
     val originalText: String?,
     /** Current text after edits and accepted corrections. */
     val text: String,
+    /** Mean token probability 0..1 reported by the engine (null = unknown). */
+    val confidence: Float? = null,
+    /** 1-based speaker number (null = no speaker labels). */
+    val speaker: Int? = null,
 )
 
 object SuggestionStatus {
@@ -148,3 +170,29 @@ data class SuggestionEntity(
 
 @Entity(tableName = "settings")
 data class SettingEntity(@PrimaryKey val key: String, val value: String)
+
+/** Exact "find -> replace" rule applied after transcription (e.g. "new paragraph" -> line break). */
+@Entity(tableName = "word_replacements")
+data class WordReplacementEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val find: String,
+    val replace: String,
+    val wholeWord: Boolean = true,
+    val matchCase: Boolean = false,
+    val enabled: Boolean = true,
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+/** A saved set of transcription choices ("Lab meeting", "Medical dictation"). */
+@Entity(tableName = "modes")
+data class ModeEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val modelId: Long?,
+    val language: String,
+    /** Vocabulary categories, newline separated (empty = all). */
+    val categories: String,
+    val identifySpeakers: Boolean,
+    val removeFillers: Boolean,
+    val createdAt: Long = System.currentTimeMillis(),
+)

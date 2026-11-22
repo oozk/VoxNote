@@ -18,3 +18,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "OfflineTranscriber"
 include(":app")
+include(":engine-transcribe")

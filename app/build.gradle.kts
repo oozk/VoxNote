@@ -104,7 +104,7 @@ tasks.withType<Test>().configureEach {
     javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(17)) })
     // a JNI library can be loaded by only one classloader per JVM (Robolectric uses its own)
     forkEvery = 1
-    listOf("native.lib.path", "test.model.path", "test.audio.path").forEach { key ->
+    listOf("native.lib.path", "test.model.path", "test.audio.path", "tc.lib.path", "tc.model.path", "tc.diarize.path", "vad.model.path").forEach { key ->
         (project.findProperty(key) as String?)?.let { systemProperty(key, it) }
     }
     testLogging {
@@ -115,6 +115,7 @@ tasks.withType<Test>().configureEach {
 }
 
 dependencies {
+    implementation(project(":engine-transcribe"))
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
     implementation("androidx.core:core-ktx:1.15.0")

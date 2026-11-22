@@ -6,6 +6,8 @@ import android.net.Uri
 import com.offlinetranscriber.engine.EngineManager
 import com.offlinetranscriber.engine.ModelInspection
 import com.offlinetranscriber.engine.ModelInspector
+import com.offlinetranscriber.engine.ROLE_ASR
+import com.offlinetranscriber.engine.ROLE_DIARIZE
 import com.offlinetranscriber.util.AppStorage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -25,11 +27,16 @@ class ModelRepository(
     suspend fun get(id: Long) = dao.get(id)
     suspend fun all() = dao.all()
 
+    /** The installed speaker-identification model, if any. */
+    suspend fun speakerModel(): ModelEntity? = dao.all().firstOrNull { it.role == ROLE_DIARIZE && it.compatible && it.verified >= 0 }
+
     /** Inspects a file chosen by the user before it is imported. */
     suspend fun inspectUri(uri: Uri): ModelInspection = withContext(Dispatchers.IO) {
         context.contentResolver.openInputStream(uri).use { input ->
             requireNotNull(input) { "Cannot open file" }
-            ModelInspector.inspect(input, storage.sizeOf(uri))
+            ModelInspector.inspect(input, storage.sizeOf(uri)) {
+                requireNotNull(context.contentResolver.openInputStream(uri)) { "Cannot open file" }
+            }
         }
     }
 
@@ -50,7 +57,7 @@ class ModelRepository(
             storage.copyUriTo(uri, dest, isCancelled) { onProgress(it, size) }
             val after = ModelInspector.inspect(dest)
             if (!after.compatible) { dest.delete(); throw IllegalArgumentException(after.message) }
-            insert(displayName?.ifBlank { null } ?: name.removeSuffix(".bin"), dest.absolutePath, null, dest.length(), after)
+            insert(displayName?.ifBlank { null } ?: after.displayName ?: name.substringBeforeLast('.'), dest.absolutePath, null, dest.length(), after)
         }
 
     /** Registers a model without copying it (keeps a persistable read permission to the document). */
@@ -60,16 +67,17 @@ class ModelRepository(
         runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
             .onFailure { throw IllegalStateException("This file location does not allow permanent access. Use \"Import (copy)\" instead.") }
         val name = storage.displayName(uri) ?: "model.bin"
-        insert(displayName?.ifBlank { null } ?: name.removeSuffix(".bin"), null, uri.toString(), storage.sizeOf(uri), inspection, notes)
+        insert(displayName?.ifBlank { null } ?: inspection.displayName ?: name.substringBeforeLast('.'), null, uri.toString(), storage.sizeOf(uri), inspection, notes)
     }
 
     private suspend fun insert(name: String, path: String?, uri: String?, size: Long, i: ModelInspection, notes: String? = null): Long {
         val id = dao.insert(
             ModelEntity(displayName = name, filePath = path, contentUri = uri, sizeBytes = size, format = i.format.label,
                 sizeClass = i.sizeClass, quantization = i.quantization, multilingual = i.multilingual,
-                compatible = i.compatible, compatibilityMessage = i.message, notes = notes)
+                compatible = i.compatible, compatibilityMessage = i.message, notes = notes,
+                engine = i.engine, role = i.role, languages = i.languages.joinToString(","))
         )
-        if (settings.current().defaultModelId == null) settings.update { it.copy(defaultModelId = id) }
+        if (i.role == ROLE_ASR && settings.current().defaultModelId == null) settings.update { it.copy(defaultModelId = id) }
         return id
     }
 
@@ -94,7 +102,7 @@ class ModelRepository(
         dao.delete(model)
         val s = settings.current()
         if (s.defaultModelId == model.id) {
-            val next = dao.all().firstOrNull { it.compatible }?.id
+            val next = dao.all().firstOrNull { it.compatible && it.role == ROLE_ASR }?.id
             settings.update { it.copy(defaultModelId = next) }
         }
     }

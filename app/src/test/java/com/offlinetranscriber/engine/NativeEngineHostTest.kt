@@ -70,6 +70,28 @@ class NativeEngineHostTest {
     }
 
     @Test
+    fun sileroVadSkipsSilenceAndKeepsTimestamps() {
+        val vad = System.getProperty("vad.model.path")
+        assumeTrue("vad.model.path not set", vad != null)
+        // 8 s of silence, then JFK: with VAD the text starts after 8 s and nothing is invented in the silence
+        val audio = FloatArray(16_000 * 8) + jfk
+        val r = e.transcribe(audio, EngineOptions(language = "en", vad = true, vadModelPath = vad))
+        val text = r.segments.joinToString(" ") { it.text }
+        println("VAD: ${r.segments.map { it.startMs to it.endMs }} $text")
+        assertTrue(text, text.lowercase().contains("what your country can do for you"))
+        assertTrue("first segment should start near 8 s, was ${r.segments.first().startMs}", r.segments.first().startMs >= 7_000)
+    }
+
+    @Test
+    fun reportsSegmentConfidence() {
+        val r = e.transcribe(jfk, EngineOptions(language = "en"))
+        val conf = r.segments.mapNotNull { it.confidence }
+        println("confidence=$conf")
+        assertTrue(conf.isNotEmpty() && conf.all { it in 0.3f..1f })
+        assertTrue(e.capabilities.decoderBoost && e.capabilities.vad)
+    }
+
+    @Test
     fun countsTokens() {
         assertTrue(e.countTokens("Thermo Fisher, HPLC, GC-MS.") in 5..20)
     }

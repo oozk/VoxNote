@@ -270,7 +270,7 @@ JNIEXPORT jint JNICALL
 Java_com_offlinetranscriber_engine_WhisperNative_nativeTranscribe(
         JNIEnv *env, jclass, jlong handle, jfloatArray jsamples, jint n_threads, jstring jlanguage,
         jboolean translate, jstring jprompt, jboolean carry_prompt, jboolean no_timestamps, jint beam_size,
-        jobjectArray jbias_terms, jfloat bias_strength, jobject listener) {
+        jobjectArray jbias_terms, jfloat bias_strength, jboolean vad, jstring jvad_model, jobject listener) {
     Engine *engine = as_engine(handle);
     if (engine == nullptr || engine->ctx == nullptr || jsamples == nullptr) return RC_BAD_ARGS;
     std::lock_guard<std::mutex> lock(engine->run_mutex);
@@ -280,6 +280,7 @@ Java_com_offlinetranscriber_engine_WhisperNative_nativeTranscribe(
 
     const std::string language = jstring_to_std(env, jlanguage);
     const std::string prompt = jstring_to_std(env, jprompt);
+    const std::string vad_model = jstring_to_std(env, jvad_model);
 
     whisper_full_params params = whisper_full_default_params(
             beam_size > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
@@ -300,6 +301,16 @@ Java_com_offlinetranscriber_engine_WhisperNative_nativeTranscribe(
         params.beam_search.beam_size = beam_size;
     } else {
         params.greedy.best_of = 2;
+    }
+
+    // Silero VAD: whisper.cpp transcribes only detected speech and maps the
+    // timestamps back to the original audio (fewer hallucinations in silence, faster).
+    if (vad == JNI_TRUE && !vad_model.empty()) {
+        params.vad = true;
+        params.vad_model_path = vad_model.c_str();
+        params.vad_params = whisper_vad_default_params();
+        params.vad_params.min_silence_duration_ms = 300;
+        params.vad_params.speech_pad_ms = 200;
     }
 
     params.abort_callback = abort_cb;
@@ -402,6 +413,23 @@ Java_com_offlinetranscriber_engine_WhisperNative_nativeSegmentNoSpeechProb(JNIEn
     Engine *engine = as_engine(handle);
     if (engine == nullptr || engine->ctx == nullptr) return 0.0f;
     return whisper_full_get_segment_no_speech_prob(engine->ctx, i);
+}
+
+/** Mean probability of the segment's text tokens (0..1), a rough recognition confidence. */
+JNIEXPORT jfloat JNICALL
+Java_com_offlinetranscriber_engine_WhisperNative_nativeSegmentConfidence(JNIEnv *, jclass, jlong handle, jint i) {
+    Engine *engine = as_engine(handle);
+    if (engine == nullptr || engine->ctx == nullptr) return -1.0f;
+    const int n = whisper_full_n_tokens(engine->ctx, i);
+    const whisper_token eot = whisper_token_eot(engine->ctx);
+    double sum = 0.0;
+    int count = 0;
+    for (int k = 0; k < n; k++) {
+        if (whisper_full_get_token_id(engine->ctx, i, k) >= eot) continue;  // skip timestamps/specials
+        sum += whisper_full_get_token_p(engine->ctx, i, k);
+        count++;
+    }
+    return count == 0 ? -1.0f : static_cast<jfloat>(sum / count);
 }
 
 JNIEXPORT jstring JNICALL

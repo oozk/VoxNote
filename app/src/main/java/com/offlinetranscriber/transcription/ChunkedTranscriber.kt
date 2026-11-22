@@ -8,6 +8,7 @@ import com.offlinetranscriber.engine.SpeechEngine
 import com.offlinetranscriber.engine.TranscriptionCancelledException
 import com.offlinetranscriber.vocab.CorrectionEngine
 import com.offlinetranscriber.vocab.CorrectionSuggestion
+import com.offlinetranscriber.vocab.LanguageStarters
 import com.offlinetranscriber.vocab.PromptBuilder
 import com.offlinetranscriber.vocab.Similarity
 import com.offlinetranscriber.vocab.VocabTerm
@@ -32,6 +33,8 @@ data class VocabularyAssist(
     val boostStrength: Float = 0f,
     /** Run local text post-processing and produce suggestions. */
     val suggestCorrections: Boolean = true,
+    /** Begin the prompt with a punctuated sentence in the known language. */
+    val languageStarter: Boolean = false,
 )
 
 interface ChunkListener {
@@ -81,22 +84,31 @@ class ChunkedTranscriber(private val engine: SpeechEngine) {
 
         for (chunk in chunks.drop(fromChunk)) {
             if (cancelled.get()) throw TranscriptionCancelledException()
+            val caps = engine.capabilities
             val plan = PromptBuilder.build(
                 terms = vocab.terms,
                 seenInThisRecording = seen,
                 previousText = prevText,
                 useVocabulary = vocab.usePrompt,
                 countTokens = { safeCount(it) },
+                starter = if (vocab.languageStarter) LanguageStarters.forLanguage(language.takeIf { it != "auto" }) else null,
             )
             listener.onChunkStarted(chunk.index, chunks.size, plan.prompt)
 
             val samples = source.read(chunk.start, chunk.length.toInt())
             val offsetMs = chunk.start * 1000 / source.sampleRate
+            // only use what the engine really supports (no silent "pretend" features)
+            val boost = when {
+                caps.decoderBoost && vocab.boostStrength > 0f -> plan.boostTerms
+                caps.vocabularyList && vocab.usePrompt -> plan.boostTerms
+                else -> emptyList()
+            }
             val chunkOptions = options.copy(
                 language = language,
-                initialPrompt = plan.prompt,
-                boostTerms = if (vocab.boostStrength > 0f) plan.boostTerms else emptyList(),
-                boostStrength = vocab.boostStrength,
+                initialPrompt = plan.prompt?.takeIf { caps.prompt },
+                boostTerms = boost,
+                boostStrength = if (caps.decoderBoost) vocab.boostStrength else 0f,
+                vad = options.vad && caps.vad,
             )
 
             val poller = ProgressPoller(engine) { p ->
@@ -134,7 +146,7 @@ class ChunkedTranscriber(private val engine: SpeechEngine) {
 
             listener.onChunkCompleted(
                 ChunkResult(chunk, segments, result.detectedLanguage ?: language.takeIf { it != "auto" },
-                    suggestions, seen.toSet(), plan.prompt)
+                    suggestions, seen.toSet(), chunkOptions.initialPrompt)
             )
             listener.onProgress((chunk.end.toFloat() / total).coerceIn(0f, 1f))
         }

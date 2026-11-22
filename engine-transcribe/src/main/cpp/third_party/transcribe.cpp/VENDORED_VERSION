@@ -1,0 +1,2 @@
+cfa237c2551a4b2d3a56ff8fe5461e3c67c51772 2026-11-21
+Local patch (VoxNote): CMAKE_SOURCE_DIR -> transcribe_SOURCE_DIR in CMake files so the library builds as a subdirectory.

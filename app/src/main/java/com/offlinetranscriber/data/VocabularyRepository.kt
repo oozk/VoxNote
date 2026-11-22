@@ -120,6 +120,24 @@ class VocabularyRepository(private val db: AppDatabase) {
         return list.map { VocabTerm(it.id, it.phrase, it.alternativeList, it.category, it.pronunciation, it.priority, it.hitCount) }
     }
 
+    // ---------- word replacements ----------
+    val replacements: Flow<List<WordReplacementEntity>> = db.replacements().observeAll()
+
+    suspend fun saveReplacement(id: Long?, find: String, replace: String, wholeWord: Boolean, matchCase: Boolean) {
+        val f = find.trim()
+        require(f.isNotEmpty()) { "Enter the text to find" }
+        if (id == null) db.replacements().insert(WordReplacementEntity(find = f, replace = replace, wholeWord = wholeWord, matchCase = matchCase))
+        else db.replacements().update(WordReplacementEntity(id = id, find = f, replace = replace, wholeWord = wholeWord, matchCase = matchCase))
+    }
+
+    suspend fun setReplacementEnabled(r: WordReplacementEntity, enabled: Boolean) = db.replacements().update(r.copy(enabled = enabled))
+    suspend fun deleteReplacement(id: Long) = db.replacements().delete(id)
+
+    suspend fun replacer(): com.offlinetranscriber.vocab.WordReplacer? {
+        val rules = db.replacements().enabled().map { com.offlinetranscriber.vocab.ReplacementRule(it.find, it.replace, it.wholeWord, it.matchCase) }
+        return if (rules.isEmpty()) null else com.offlinetranscriber.vocab.WordReplacer(rules)
+    }
+
     suspend fun recordHits(ids: Collection<Long>) {
         if (ids.isNotEmpty()) ids.chunked(500).forEach { keywords.incrementHits(it) }
     }

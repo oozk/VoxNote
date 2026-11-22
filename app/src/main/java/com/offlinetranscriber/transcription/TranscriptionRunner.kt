@@ -14,7 +14,11 @@ import com.offlinetranscriber.data.SuggestionStatus
 import com.offlinetranscriber.data.TranscriptionEntity
 import com.offlinetranscriber.engine.EngineOptions
 import com.offlinetranscriber.engine.EngineSegment
+import com.offlinetranscriber.engine.EngineCapabilities
+import com.offlinetranscriber.engine.SpeakerDiarizer
 import com.offlinetranscriber.engine.TranscriptionCancelledException
+import com.offlinetranscriber.engine.VadModel
+import com.offlinetranscriber.vocab.TextPipeline
 import com.offlinetranscriber.vocab.CorrectionEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,6 +35,7 @@ enum class RunPhase(val label: String) {
     PREPARING_AUDIO("Preparing audio"),
     LOADING_MODEL("Loading model"),
     TRANSCRIBING("Transcribing"),
+    IDENTIFYING_SPEAKERS("Identifying speakers"),
     FINISHING("Finishing"),
 }
 
@@ -55,6 +60,10 @@ data class RunState(
  * crash, a reboot or a cancellation never loses completed work.
  */
 class TranscriptionRunner(private val c: AppContainer) {
+    companion object {
+        const val SPEAKER_WINDOW_MS = 15L * 60_000
+    }
+
     private val _state = MutableStateFlow<RunState?>(null)
     val state: StateFlow<RunState?> = _state.asStateFlow()
 
@@ -91,7 +100,7 @@ class TranscriptionRunner(private val c: AppContainer) {
 
             // 2. model
             _state.value = _state.value?.copy(phase = RunPhase.LOADING_MODEL, fraction = 0f)
-            val engine = c.engines.acquire(model, settings.flashAttention, settings.allowLowMemoryLoad)
+            val engine = c.engines.acquire(model, settings.flashAttention, settings.allowLowMemoryLoad, settings.effectiveThreads())
             if (cancelRequested.get()) throw TranscriptionCancelledException()
             c.engines.markBusy(true)
 
@@ -110,7 +119,8 @@ class TranscriptionRunner(private val c: AppContainer) {
                 // 4. vocabulary
                 val categories = job.vocabularyCategories.lines().filter { it.isNotBlank() }
                 val terms = c.vocabulary.termsFor(categories)
-                val note = vocabularyNote(settings, terms.size)
+                val note = vocabularyNote(settings, terms.size, engine.capabilities)
+                val pipeline = TextPipeline(c.vocabulary.replacer(), settings.removeFillers)
                 job = save(job.copy(status = JobStatus.RUNNING, vocabularyNote = note))
 
                 val t = ChunkedTranscriber(engine)
@@ -144,7 +154,7 @@ class TranscriptionRunner(private val c: AppContainer) {
                     var lastMark = System.currentTimeMillis()
                     override fun onChunkCompleted(result: ChunkResult) = runBlocking {
                         val now = System.currentTimeMillis()
-                        job = persistChunk(job, result, settings, now - lastMark)
+                        job = persistChunk(job, result, settings, now - lastMark, pipeline)
                         lastMark = now
                         _state.value = _state.value?.copy(language = job.languageDetected ?: job.languageRequested)
                     }
@@ -154,16 +164,21 @@ class TranscriptionRunner(private val c: AppContainer) {
                     language = job.languageRequested,
                     timestamps = settings.timestamps,
                     beamSize = settings.quality.beamSize,
+                    vad = settings.skipSilence,
+                    vadModelPath = if (settings.skipSilence) VadModel.path(c.context) else null,
                 )
                 runInterruptible(Dispatchers.Default) {
                     t.run(source, chunks, from, options, VocabularyAssist(terms, settings.vocabularyPrompt,
-                        settings.vocabularyBoost.strength, settings.suggestCorrections), listener,
+                        settings.vocabularyBoost.strength, settings.suggestCorrections, settings.languageStarter), listener,
                         previousText = job.previousText, seenTermIds = parseIds(job.seenTermIds),
                         knownLanguage = job.languageDetected)
                 }
             }
 
-            // 5. done
+            // 5. speakers (optional)
+            if (job.identifySpeakers) identifySpeakers(job, settings)
+
+            // 6. done
             _state.value = _state.value?.copy(phase = RunPhase.FINISHING, fraction = 1f, etaMs = null)
             c.vocabulary.recordHits(parseIds(job.seenTermIds))
             val keepPcm = job.pcmPath == job.audioPath
@@ -197,7 +212,37 @@ class TranscriptionRunner(private val c: AppContainer) {
         r.wav to r.durationMs
     }
 
-    private suspend fun persistChunk(job: TranscriptionEntity, r: ChunkResult, s: AppSettings, elapsedMs: Long): TranscriptionEntity =
+    /**
+     * Labels segments with speaker numbers using the installed speaker model. Long recordings
+     * are processed in windows of [SPEAKER_WINDOW_MS]; numbering is consistent within a window.
+     */
+    private suspend fun identifySpeakers(job: TranscriptionEntity, settings: AppSettings) {
+        val model = c.models.speakerModel() ?: return
+        _state.value = _state.value?.copy(phase = RunPhase.IDENTIFYING_SPEAKERS, fraction = 0f, etaMs = null)
+        val diarizer = c.engines.acquireDiarizer(model, settings.effectiveThreads())
+        val segs = c.db.segments().forTranscription(job.id)
+        if (segs.isEmpty()) return
+        val turns = ArrayList<SpeakerDiarizer.Turn>()
+        WavPcmSource(File(job.pcmPath!!)).use { src ->
+            val window = SPEAKER_WINDOW_MS * 16
+            var start = 0L
+            var offsetSpeaker = 0
+            while (start < src.sampleCount) {
+                if (cancelRequested.get()) throw TranscriptionCancelledException()
+                val n = minOf(window, src.sampleCount - start).toInt()
+                val offsetMs = start / 16
+                val found = runInterruptible(Dispatchers.Default) { diarizer.run(src.read(start, n)) }
+                turns += found.map { it.copy(startMs = it.startMs + offsetMs, endMs = it.endMs + offsetMs, speaker = it.speaker + offsetSpeaker) }
+                offsetSpeaker += found.maxOfOrNull { it.speaker } ?: 0
+                start += n
+                _state.value = _state.value?.copy(fraction = (start.toFloat() / src.sampleCount).coerceAtMost(1f))
+            }
+        }
+        val assigned = SpeakerAssignment.renumber(SpeakerAssignment.assign(segs.map { SpeakerAssignment.Span(it.startMs, it.endMs) }, turns))
+        c.db.segments().updateAll(segs.mapIndexed { i, sg -> sg.copy(speaker = assigned[i]) })
+    }
+
+    private suspend fun persistChunk(job: TranscriptionEntity, r: ChunkResult, s: AppSettings, elapsedMs: Long, pipeline: TextPipeline): TranscriptionEntity =
         c.db.withTransaction {
             val segDao = c.db.segments()
             var pos = segDao.maxPosition(job.id) + 1
@@ -207,7 +252,8 @@ class TranscriptionRunner(private val c: AppContainer) {
                 val auto = if (s.autoApplyCorrections) bySegment[i].orEmpty().filter { it.confidence >= s.autoApplyThreshold } else emptyList()
                 SegmentEntity(transcriptionId = job.id, position = pos++, startMs = seg.startMs, endMs = seg.endMs,
                     originalText = if (s.preserveOriginal) seg.text.trim() else null,
-                    text = CorrectionEngine.apply(seg.text, auto).trim())
+                    text = pipeline.process(CorrectionEngine.apply(seg.text, auto).trim(), r.detectedLanguage ?: job.languageDetected),
+                    confidence = seg.confidence, speaker = seg.speaker)
             }
             val ids = segDao.insertAll(rows)
             val sugg = r.suggestions.mapNotNull { sg ->
@@ -241,11 +287,13 @@ class TranscriptionRunner(private val c: AppContainer) {
 
     private fun parseIds(s: String): Set<Long> = s.split(',').mapNotNull { it.trim().toLongOrNull() }.toSet()
 
-    private fun vocabularyNote(s: AppSettings, terms: Int): String = if (terms == 0) "No vocabulary used." else buildString {
-        append("$terms vocabulary terms. ")
+    private fun vocabularyNote(s: AppSettings, terms: Int, caps: EngineCapabilities): String = if (terms == 0) "No vocabulary used." else buildString {
+        append("$terms vocabulary terms (${caps.engineName}). ")
         val parts = ArrayList<String>()
-        if (s.vocabularyPrompt) parts.add("prompt context (decoder spelling hint)")
-        if (s.vocabularyBoost.strength > 0f) parts.add("decoder keyword boost: ${s.vocabularyBoost.label.lowercase()}")
+        if (s.vocabularyPrompt && caps.prompt) parts.add("prompt context (decoder spelling hint)")
+        if (s.vocabularyBoost.strength > 0f && caps.decoderBoost) parts.add("decoder keyword boost: ${s.vocabularyBoost.label.lowercase()}")
+        if (s.vocabularyPrompt && caps.vocabularyList) parts.add("model vocabulary list")
+        if (!caps.prompt && !caps.vocabularyList) parts.add("(this model accepts no vocabulary hints)")
         if (s.suggestCorrections) parts.add("local text post-processing suggestions" + if (s.autoApplyCorrections) " (listed spellings auto-applied)" else "")
         append(if (parts.isEmpty()) "Vocabulary assistance is turned off." else "Used: " + parts.joinToString("; ") + ".")
         append(" None of these change what the acoustic model hears.")
